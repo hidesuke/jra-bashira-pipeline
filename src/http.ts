@@ -120,7 +120,8 @@ async function runOne(request: Request, caller: Caller, deps: HttpDeps): Promise
     return json({ error: "このレースは処理中です", race_key: race.raceKey }, 409);
   }
   try {
-    await deps.enqueue({ kind: "start", runId, race, requestedBy: caller.name });
+    const remarks = typeof (body as { remarks?: unknown }).remarks === "string" ? (body as { remarks: string }).remarks.trim() : "";
+    await deps.enqueue({ kind: "start", runId, race, requestedBy: caller.name, remarks });
   } catch (err) {
     await deps.kv.delete(keys.lock(race.raceKey));
     throw err;

@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// 非公開リポジトリのプロンプト本文を KV に入れる。
-// キーは prompt:v2:course / prompt:v2:race。値は {"version","text"}。
+// prompts/v1 を KV の prompt:v2:course / prompt:v2:race に入れる。
+// 値は {"version":"v1","system","user"}。--remote を付けたときだけ本番 KV に書く。
 //
-// node scripts/put-prompts.mjs --stage course --version 3 --file ./course.md --remote
-// node scripts/put-prompts.mjs --stage race --version 4 --file ./race.md --namespace-id <id> --remote
+// node scripts/put-prompts.mjs --dry-run
+// node scripts/put-prompts.mjs --local
+// node scripts/put-prompts.mjs --namespace-id <id> --remote
 
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
@@ -18,37 +19,55 @@ function flag(name) {
   return args[index + 1];
 }
 
-const stage = flag("--stage");
-const version = flag("--version");
-const file = flag("--file");
 const namespaceId = flag("--namespace-id");
 const remote = args.includes("--remote");
 const preview = args.includes("--preview");
 const local = args.includes("--local");
+const dryRun = args.includes("--dry-run");
 
-if (!stage || !["course", "race"].includes(stage) || !version || !file || (!remote && !preview && !local)) {
-  console.error(
-    "使い方: node scripts/put-prompts.mjs --stage course|race --version <版> --file <本文ファイル> (--remote | --preview | --local) [--namespace-id <id>]",
-  );
+if (!remote && !preview && !local && !dryRun) {
+  console.error("使い方: node scripts/put-prompts.mjs (--dry-run | --local | --preview | --remote) [--namespace-id <id>]");
+  console.error("prompts/v1 の course_system.md / course_user.md / race_system.md / race_user.md を version v1 で入れます。本番へ書くのは --remote のときだけです。");
   process.exit(1);
 }
 
-const text = readFileSync(file, "utf8");
-if (!text.trim()) {
-  console.error("プロンプトファイルが空です");
+const root = join(import.meta.dirname, "..");
+const courseSystem = readFileSync(join(root, "prompts/v1/course_system.md"), "utf8");
+const courseUser = readFileSync(join(root, "prompts/v1/course_user.md"), "utf8");
+const raceSystem = readFileSync(join(root, "prompts/v1/race_system.md"), "utf8");
+const raceUser = readFileSync(join(root, "prompts/v1/race_user.md"), "utf8");
+if (!courseSystem.trim() || !courseUser.trim() || !raceSystem.trim() || !raceUser.trim()) {
+  console.error("prompts/v1 のファイルが空です");
   process.exit(1);
 }
 
-const destination = join(tmpdir(), `jra-prompt-${stage}-${version}.json`);
-writeFileSync(destination, JSON.stringify({ version, text }));
+const payloads = {
+  "prompt:v2:course": { version: "v1", system: courseSystem, user: courseUser },
+  "prompt:v2:race": { version: "v1", system: raceSystem, user: raceUser },
+};
 
-const wranglerArgs = ["wrangler", "kv", "key", "put", `prompt:v2:${stage}`, "--path", destination];
-if (namespaceId) wranglerArgs.push("--namespace-id", namespaceId);
-else wranglerArgs.push("--binding", "APP_KV");
-if (remote) wranglerArgs.push("--remote");
-if (preview) wranglerArgs.push("--preview");
-if (local) wranglerArgs.push("--local");
+if (dryRun) {
+  for (const [key, value] of Object.entries(payloads)) {
+    console.log(`${key} version=${value.version} system=${value.system.length} user=${value.user.length}`);
+  }
+  process.exit(0);
+}
 
-const result = spawnSync("npx", wranglerArgs, { stdio: "inherit" });
-unlinkSync(destination);
-process.exit(result.status ?? 1);
+const files = [];
+for (const [key, value] of Object.entries(payloads)) {
+  const destination = join(tmpdir(), `jra-prompt-${key.replaceAll(":", "-")}.json`);
+  writeFileSync(destination, JSON.stringify(value));
+  files.push(destination);
+  const wranglerArgs = ["wrangler", "kv", "key", "put", key, "--path", destination];
+  if (namespaceId) wranglerArgs.push("--namespace-id", namespaceId);
+  else wranglerArgs.push("--binding", "APP_KV");
+  if (remote) wranglerArgs.push("--remote");
+  if (preview) wranglerArgs.push("--preview");
+  if (local) wranglerArgs.push("--local");
+  const result = spawnSync("npx", wranglerArgs, { stdio: "inherit" });
+  if ((result.status ?? 1) !== 0) {
+    for (const file of files) unlinkSync(file);
+    process.exit(result.status ?? 1);
+  }
+}
+for (const file of files) unlinkSync(file);

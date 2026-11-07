@@ -22,6 +22,9 @@ export interface GeminiText {
 export async function generateText(input: {
   apiKey: string;
   model: string;
+  /** Gemini の systemInstruction。Dify の system メッセージ。 */
+  system?: string;
+  /** Gemini の user メッセージ。 */
   prompt: string;
   budget: ExternalBudget;
   json?: boolean;
@@ -37,13 +40,16 @@ export async function generateText(input: {
 }
 
 async function callGemini(
-  input: { apiKey: string; model: string; prompt: string; budget: ExternalBudget; fetcher?: typeof fetch },
+  input: { apiKey: string; model: string; system?: string; prompt: string; budget: ExternalBudget; fetcher?: typeof fetch },
   json: boolean,
 ): Promise<GeminiText> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:generateContent`;
   const body: Record<string, unknown> = {
     contents: [{ role: "user", parts: [{ text: input.prompt }] }],
   };
+  if (input.system?.trim()) {
+    body.systemInstruction = { parts: [{ text: input.system }] };
+  }
   if (json) {
     body.generationConfig = {
       responseMimeType: "application/json",

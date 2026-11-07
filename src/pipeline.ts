@@ -2,7 +2,10 @@ import { fetchBaba, babaFailure } from "./baba";
 import { pageBlocks, pageTitle } from "./body";
 import { chunkChildren } from "./notion-blocks";
 import { ExternalBudget } from "./budget";
-import { generateText, parseRacePrediction } from "./gemini";
+import { composeRemarks, fillCourseUser, fillRaceUser, mergeGoing } from "./dify-input";
+import { readRacePrediction } from "./extract-prediction";
+import { buildFormTasks, FORM_BATCH_SIZE, selectPastRuns } from "./form";
+import { generateText } from "./gemini";
 import { loadJob, saveJob, type JobState } from "./job";
 import { keys } from "./kv";
 import { loadModels } from "./models";
@@ -17,9 +20,10 @@ import {
   type NotionSchema,
 } from "./notion";
 import { interpretOdds } from "./odds";
-import { loadPrompt, renderPrompt } from "./prompts";
+import { loadPrompt } from "./prompts";
 import { numberField, rowsToObjects, stringField } from "./rows";
 import { ambiguousNameMessage } from "./bashira/mcp";
+import { renderUmabashira } from "./umabashira";
 import type { BashiraPort } from "./bashira/port";
 import { assertFields, assertToolArgs, catalogFromTools } from "./schema";
 import { buildStatTasks, hydrateStatCache, writeStatCache, yearFrom } from "./stats";
@@ -146,6 +150,7 @@ async function dispatch(message: JobMessage, deps: PipelineDeps): Promise<void> 
   }
   const state = await loadJob(deps.kv, message.raceKey);
   if (!state || state.runId !== message.runId || state.phase === "done" || state.phase === "error") return;
+  if (message.kind === "form") await runForm(state, deps);
   if (message.kind === "stats") await runStats(state, deps);
   if (message.kind === "predict") await runPredict(state, deps);
   if (message.kind === "notion") await runNotion(state, deps);
@@ -226,6 +231,7 @@ async function collect(message: Extract<JobMessage, { kind: "start" }>, deps: Pi
     now: deps.now(),
   });
   const active = entries.filter((row) => !SCRATCHED.has(stringField(row, "race_abnormality") ?? ""));
+  const formTasks = buildFormTasks(active, message.race, catalog);
   const tasks = buildStatTasks(
     {
       venue: message.race.venue,
@@ -245,10 +251,12 @@ async function collect(message: Extract<JobMessage, { kind: "start" }>, deps: Pi
     runId: message.runId,
     race: message.race,
     requestedBy: message.requestedBy,
-    phase: tasks.some((task) => task.status === "pending") ? "stats" : "predict",
+    phase: formTasks.some((task) => task.status === "pending") ? "form" : tasks.some((task) => task.status === "pending") ? "stats" : "predict",
+    remarks: message.remarks?.trim() ?? "",
     baba,
     raceRow,
     entries,
+    formTasks,
     odds,
     courseVariant: null,
     statTasks: tasks,
@@ -258,6 +266,49 @@ async function collect(message: Extract<JobMessage, { kind: "start" }>, deps: Pi
   };
   await saveJob(deps.kv, state);
   await enqueuePhase(state, deps);
+}
+
+async function runForm(state: JobState, deps: PipelineDeps): Promise<void> {
+  const tasks = state.formTasks ?? [];
+  const pending = tasks.filter((task) => task.status === "pending");
+  if (pending.length === 0) {
+    state.phase = phaseAfterForm(state);
+    state.updatedAt = deps.now().toISOString();
+    await saveJob(deps.kv, state);
+    await enqueuePhase(state, deps);
+    return;
+  }
+  const batch = pending.slice(0, FORM_BATCH_SIZE);
+  for (const task of batch) {
+    const result = await deps.bashira.callTool("get_entries", task.args);
+    if (!result.ok) {
+      state.updatedAt = deps.now().toISOString();
+      await saveJob(deps.kv, state);
+      throw toolError(result);
+    }
+    const ambiguity = ambiguousNameMessage(result.data);
+    if (ambiguity) {
+      task.status = "done";
+      task.rows = [];
+      task.note = `${ambiguity}。この馬の近走は空にします`;
+    } else {
+      task.rows = selectPastRuns(rowsToObjects(result.data), state.race, task.horseName);
+      task.status = "done";
+      if (result.data && typeof result.data === "object" && (result.data as { truncated?: unknown }).truncated === true) {
+        task.note = "近走の取得が打ち切られました";
+      }
+    }
+    state.updatedAt = deps.now().toISOString();
+    await saveJob(deps.kv, state);
+  }
+  state.phase = tasks.some((task) => task.status === "pending") ? "form" : phaseAfterForm(state);
+  state.updatedAt = deps.now().toISOString();
+  await saveJob(deps.kv, state);
+  await enqueuePhase(state, deps);
+}
+
+function phaseAfterForm(state: JobState): JobState["phase"] {
+  return state.statTasks.some((task) => task.status === "pending") ? "stats" : "predict";
 }
 
 async function runStats(state: JobState, deps: PipelineDeps): Promise<void> {
@@ -296,23 +347,19 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
     const models = await loadModels(deps.kv, deps.config.defaultModel);
     const coursePrompt = await loadPrompt(deps.kv, "course");
     const racePrompt = await loadPrompt(deps.kv, "race");
+    const surface = state.raceRow ? stringField(state.raceRow, "surface") : null;
+    const distance = state.raceRow ? numberField(state.raceRow, "distance") : null;
+    const going = mergeGoing({ raceRow: state.raceRow, baba: state.baba, surface });
     const course = await generateText({
       apiKey: deps.config.geminiApiKey,
       model: models.config.course,
       budget,
       fetcher: deps.fetch,
-      prompt: renderPrompt(coursePrompt, {
-        course_variant: null,
-        course_variant_note: "内・外コースのデータは無い",
-        race: state.race,
-        race_row: state.raceRow,
-        baba: state.baba,
-        stats: state.statTasks.map((task) => ({
-          id: task.id,
-          label: task.label,
-          note: task.note ?? null,
-          result: task.result ?? null,
-        })),
+      system: coursePrompt.system,
+      prompt: fillCourseUser(coursePrompt.user, {
+        course: state.race.venue,
+        type: surface ?? "不明",
+        distance: distance == null ? "不明" : String(distance),
       }),
     });
     const race = await generateText({
@@ -320,19 +367,16 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       model: models.config.race,
       budget,
       fetcher: deps.fetch,
-      json: true,
-      prompt: renderPrompt(racePrompt, {
-        course_variant: null,
-        course_analysis: course.text,
-        course_model_version: course.modelVersion,
-        race: state.race,
-        race_row: state.raceRow,
-        entries: state.entries,
-        odds: state.odds,
-        baba: state.baba,
+      system: racePrompt.system,
+      prompt: fillRaceUser(racePrompt.user, {
+        umabashira: renderUmabashira({ race: state.race, entries: state.entries, formTasks: state.formTasks ?? [] }),
+        course: course.text,
+        weather: going.weather,
+        condition: going.condition,
+        remarks: composeRemarks(state.remarks ?? "", going.babaDetail, state.race),
       }),
     });
-    const fields = parseRacePrediction(race.text);
+    const fields = readRacePrediction(race.text);
     state.prediction = {
       courseText: course.text,
       courseModel: models.config.course,
@@ -556,7 +600,9 @@ function assertNoAmbiguity(payload: unknown): void {
 }
 
 async function enqueuePhase(state: JobState, deps: PipelineDeps): Promise<void> {
-  if (state.phase === "stats") {
+  if (state.phase === "form") {
+    await deps.enqueue({ kind: "form", runId: state.runId, raceKey: state.race.raceKey });
+  } else if (state.phase === "stats") {
     await deps.enqueue({ kind: "stats", runId: state.runId, raceKey: state.race.raceKey });
   } else if (state.phase === "predict") {
     await deps.enqueue({ kind: "predict", runId: state.runId, raceKey: state.race.raceKey });
@@ -578,9 +624,11 @@ async function persistFailure(message: JobMessage, deps: PipelineDeps, err: unkn
       requestedBy: message.requestedBy,
       phase: retry ? "collect" : "error",
       error: retry ? undefined : text,
+      remarks: message.kind === "start" ? message.remarks?.trim() ?? "" : "",
       baba: null,
       raceRow: null,
       entries: [],
+      formTasks: [],
       odds: null,
       courseVariant: null,
       statTasks: [],
