@@ -1,0 +1,63 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "jra-bashira-predict",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-07",
+  "compatibility_flags": ["nodejs_compat"],
+  // 1レースの手動実行が前提なので、ログもトレースも全件残す。
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 1 }
+  },
+  // cron は時刻が決まるまで無効。有効化しても src/index.ts の scheduled は
+  // レースを積まずに戻る（開発モードは POST /run の 1 レースだけ）。
+  // "triggers": {
+  //   "crons": ["0 21 * * *"]
+  // },
+  "vars": {
+    "BASHIRA_MCP_URL": "https://mcp.bashira.omninode.co.jp/mcp",
+    "BABA_URL": "https://jra-dify-pipeline.hdsk.workers.dev/baba/latest",
+    "NOTION_DATABASE_ID": "3c57c7b2e419808ba999e9c1909fa39c",
+    "STATS_PERIOD_YEARS": "5",
+    "STATS_MIN_STARTS": "30",
+    "STATS_BROODMARE_SIRE_MIN_STARTS": "50",
+    "DEFAULT_MODEL": "gemini-flash-latest",
+    "ACCESS_TEAM_DOMAIN": "https://YOUR_TEAM.cloudflareaccess.com",
+    "ACCESS_AUD": "YOUR_ACCESS_AUD_TAG",
+    "ACCESS_CLIENT_ID_GROK": "",
+    "ACCESS_CLIENT_ID_MUSE": ""
+  },
+  "secrets": {
+    "required": ["GEMINI_API_KEY", "NOTION_TOKEN", "TOKEN_ENCRYPTION_KEY"]
+  },
+  "kv_namespaces": [
+    {
+      "binding": "APP_KV",
+      // wrangler kv namespace create APP_KV の id に差し替える。
+      "id": "00000000000000000000000000000000",
+      "preview_id": "00000000000000000000000000000000"
+    }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "RACE_QUEUE", "queue": "jra-bashira-race" }
+    ],
+    "consumers": [
+      {
+        "queue": "jra-bashira-race",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 3,
+        "max_concurrency": 1
+      }
+    ]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "BASHIRA_AUTH", "class_name": "BashiraAuth" }]
+  },
+  // 新規 Worker は migrations ではなく宣言的 exports。
+  "exports": {
+    "BashiraAuth": { "type": "durable-object", "storage": "sqlite" }
+  }
+}

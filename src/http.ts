@@ -1,0 +1,291 @@
+import { identifyCaller, type Caller } from "./access";
+import { loadJob } from "./job";
+import { keys } from "./kv";
+import {
+  applyModelUpdate,
+  assertModelsAllowed,
+  listGenerateContentModels,
+  loadModelHistory,
+  loadModels,
+  restoreModelUpdate,
+  saveModelState,
+} from "./models";
+import { acquireLock, type AppConfig } from "./pipeline";
+import { parseRaceRequest } from "./race-ref";
+import { JobError, errorMessage, type JobMessage, type KvStore } from "./types";
+import type { JWTPayload } from "jose";
+import { ExternalBudget } from "./budget";
+
+export interface HttpConfig extends AppConfig {
+  accessTeamDomain: string;
+  accessAud: string;
+  accessClientIdGrok: string;
+  accessClientIdMuse: string;
+}
+
+export interface OAuthPort {
+  getStatus(): Promise<{
+    registered: boolean;
+    authorized: boolean;
+    needsReauth: boolean;
+    expiresAt: string | null;
+    lastError: string | null;
+  }>;
+  beginAuthorization(redirectUri: string): Promise<{ url: string }>;
+  completeAuthorization(input: { code: string; state: string; iss: string | null }): Promise<{ ok: true }>;
+}
+
+export interface HttpDeps {
+  config: HttpConfig;
+  kv: KvStore;
+  enqueue(message: JobMessage): Promise<void>;
+  now(): Date;
+  fetch?: typeof fetch;
+  verifyJwt(token: string): Promise<JWTPayload>;
+  oauth: OAuthPort;
+}
+
+export async function handleRequest(request: Request, deps: HttpDeps): Promise<Response> {
+  const url = new URL(request.url);
+  try {
+    if (request.method === "GET" && url.pathname === "/health") {
+      return json({ ok: true, mode: "one-race" });
+    }
+    if (request.method === "GET" && url.pathname === "/oauth/callback") {
+      return await oauthCallback(url, deps);
+    }
+    if (request.method === "GET" && url.pathname === "/oauth/start") {
+      await requireCaller(request, deps);
+      const redirectUri = new URL("/oauth/callback", url.origin).toString();
+      const started = await deps.oauth.beginAuthorization(redirectUri);
+      return Response.redirect(started.url, 302);
+    }
+    if (request.method === "GET" && url.pathname === "/oauth/status") {
+      await requireCaller(request, deps);
+      return json(await deps.oauth.getStatus());
+    }
+    if (request.method === "POST" && url.pathname === "/run") {
+      const caller = await requireCaller(request, deps);
+      return await runOne(request, caller, deps);
+    }
+    if (url.pathname === "/admin/models" && request.method === "GET") {
+      const caller = await requireCaller(request, deps);
+      return await getModels(deps, caller);
+    }
+    if (url.pathname === "/admin/models" && request.method === "PUT") {
+      const caller = await requireCaller(request, deps);
+      return await putModels(request, deps, caller);
+    }
+    if (url.pathname === "/admin/models/restore" && request.method === "POST") {
+      const caller = await requireCaller(request, deps);
+      return await restoreModels(deps, caller);
+    }
+    if (url.pathname === "/admin/jobs" && request.method === "GET") {
+      await requireCaller(request, deps);
+      return await getJob(url, deps);
+    }
+    return json({ error: "not found" }, 404);
+  } catch (err) {
+    if (err instanceof HttpError) return json({ error: err.message }, err.status);
+    if (err instanceof JobError) return json({ error: err.message }, 400);
+    return json({ error: errorMessage(err) }, 500);
+  }
+}
+
+async function runOne(request: Request, caller: Caller, deps: HttpDeps): Promise<Response> {
+  const body = await readJson(request);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new JobError("JSON オブジェクトでレースを 1 件指定してください", false);
+  }
+  const race = parseRaceRequest(body);
+  const runId = crypto.randomUUID();
+  const locked = await acquireLock(deps.kv, race.raceKey, runId, caller.name, deps.now());
+  if (!locked) {
+    return json({ error: "このレースは処理中です", race_key: race.raceKey }, 409);
+  }
+  try {
+    await deps.enqueue({ kind: "start", runId, race, requestedBy: caller.name });
+  } catch (err) {
+    await deps.kv.delete(keys.lock(race.raceKey));
+    throw err;
+  }
+  return json(
+    { enqueued: true, race_key: race.raceKey, run_id: runId, requested_by: caller.name },
+    202,
+  );
+}
+
+async function getModels(deps: HttpDeps, _caller: Caller): Promise<Response> {
+  const budget = new ExternalBudget();
+  const [models, current, history] = await Promise.all([
+    listGenerateContentModels({
+      kv: deps.kv,
+      apiKey: deps.config.geminiApiKey,
+      budget,
+      now: deps.now(),
+      fetcher: deps.fetch,
+    }),
+    loadModels(deps.kv, deps.config.defaultModel),
+    loadModelHistory(deps.kv),
+  ]);
+  return json({
+    note: "course はコース分析、race はレース予想に使う Gemini モデルです。",
+    current: current.config,
+    source: current.source,
+    previous: history.previous,
+    history_count: history.history.length,
+    models,
+  });
+}
+
+async function putModels(request: Request, deps: HttpDeps, caller: Caller): Promise<Response> {
+  const body = (await readJson(request)) as { course?: unknown; race?: unknown };
+  const patch: { course?: string; race?: string } = {};
+  if (body.course != null) {
+    if (typeof body.course !== "string") throw new JobError("course は文字列です", false);
+    patch.course = body.course;
+  }
+  if (body.race != null) {
+    if (typeof body.race !== "string") throw new JobError("race は文字列です", false);
+    patch.race = body.race;
+  }
+  const budget = new ExternalBudget();
+  const allowed = await listGenerateContentModels({
+    kv: deps.kv,
+    apiKey: deps.config.geminiApiKey,
+    budget,
+    now: deps.now(),
+    fetcher: deps.fetch,
+  });
+  const names = new Set(allowed.map((model) => model.name));
+  const current = await loadModels(deps.kv, deps.config.defaultModel);
+  const history = await loadModelHistory(deps.kv);
+  const next = applyModelUpdate({
+    current: current.config,
+    history: history.history,
+    patch,
+    caller: caller.name,
+    clientId: caller.clientId,
+    now: deps.now(),
+  });
+  assertModelsAllowed(next.current, names);
+  await saveModelState(deps.kv, next);
+  return json({
+    note: "モデルを更新しました。履歴には変更前、変更後、呼び出し元、日本時間を残しています。",
+    current: next.current,
+    previous: next.previous,
+    caller: caller.name,
+  });
+}
+
+async function restoreModels(deps: HttpDeps, caller: Caller): Promise<Response> {
+  const current = await loadModels(deps.kv, deps.config.defaultModel);
+  const history = await loadModelHistory(deps.kv);
+  const next = restoreModelUpdate({
+    current: current.config,
+    previous: history.previous,
+    history: history.history,
+    caller: caller.name,
+    clientId: caller.clientId,
+    now: deps.now(),
+  });
+  await saveModelState(deps.kv, next);
+  return json({
+    note: "直前のモデル設定に戻しました。",
+    current: next.current,
+    previous: next.previous,
+    caller: caller.name,
+  });
+}
+
+async function getJob(url: URL, deps: HttpDeps): Promise<Response> {
+  const raceKey = url.searchParams.get("race_key");
+  if (!raceKey) throw new JobError("race_key を指定してください", false);
+  const state = await loadJob(deps.kv, raceKey);
+  if (!state) return json({ error: "ジョブがありません", race_key: raceKey }, 404);
+  return json({
+    race_key: state.race.raceKey,
+    run_id: state.runId,
+    phase: state.phase,
+    error: state.error ?? null,
+    requested_by: state.requestedBy,
+    notion_page_id: state.notionPageId,
+    course_variant: state.courseVariant,
+    odds: state.odds
+      ? {
+          available: state.odds.available,
+          kind: state.odds.kind,
+          observed_at_jst: state.odds.observedAtJst,
+          reason: state.odds.reason,
+        }
+      : null,
+  });
+}
+
+async function oauthCallback(url: URL, deps: HttpDeps): Promise<Response> {
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  const iss = url.searchParams.get("iss");
+  if (!code || !state) return html("認可コードまたは state がありません。", 400);
+  try {
+    await deps.oauth.completeAuthorization({ code, state, iss });
+  } catch (err) {
+    return html(`認可に失敗しました。${escapeHtml(errorMessage(err))}`, 400);
+  }
+  return html("BASHIRA の認可が完了しました。このタブを閉じて構いません。");
+}
+
+async function requireCaller(request: Request, deps: HttpDeps): Promise<Caller> {
+  if (!deps.config.accessTeamDomain.startsWith("https://") || deps.config.accessTeamDomain.includes("YOUR_TEAM")) {
+    throw new HttpError(500, "ACCESS_TEAM_DOMAIN を https://<team>.cloudflareaccess.com に設定してください");
+  }
+  if (!deps.config.accessAud || deps.config.accessAud.includes("YOUR_ACCESS_AUD")) {
+    throw new HttpError(500, "ACCESS_AUD に Access アプリケーションの AUD を設定してください");
+  }
+  const token = request.headers.get("cf-access-jwt-assertion");
+  if (!token) throw new HttpError(403, "Cf-Access-Jwt-Assertion がありません");
+  let payload: JWTPayload;
+  try {
+    payload = await deps.verifyJwt(token);
+  } catch (err) {
+    throw new HttpError(403, `Access JWT を検証できません: ${errorMessage(err)}`);
+  }
+  return identifyCaller({
+    clientId: request.headers.get("cf-access-client-id"),
+    payload,
+    grokClientId: deps.config.accessClientIdGrok,
+    museClientId: deps.config.accessClientIdMuse,
+  });
+}
+
+async function readJson(request: Request): Promise<unknown> {
+  try {
+    return await request.json();
+  } catch {
+    throw new JobError("JSON ボディを解釈できません", false);
+  }
+}
+
+function json(body: unknown, status = 200): Response {
+  return Response.json(body, { status });
+}
+
+function html(message: string, status = 200): Response {
+  return new Response(`<!doctype html><meta charset="utf-8"><title>BASHIRA</title><p>${message}</p>`, {
+    status,
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+}
+
+function escapeHtml(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}

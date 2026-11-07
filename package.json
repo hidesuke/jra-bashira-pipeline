@@ -1,0 +1,22 @@
+{
+  "name": "jra-bashira-predict",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "1レースずつ BASHIRA で一次予想を作り、Notion に書く Cloudflare Worker",
+  "scripts": {
+    "types": "wrangler types",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "tsc --noEmit && vitest run"
+  },
+  "dependencies": {
+    "jose": "^6.1.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.50.0"
+  }
+}

@@ -1,0 +1,5 @@
+# wrangler secret put と同じ名前。値はローカル専用。コミットしない。
+GEMINI_API_KEY=
+NOTION_TOKEN=
+# openssl rand -base64 32
+TOKEN_ENCRYPTION_KEY=
