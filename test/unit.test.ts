@@ -10,8 +10,9 @@ import { MemoryKv } from "../src/kv";
 import { applyModelUpdate, assertModelsAllowed, generateContentModels, restoreModelUpdate } from "../src/models";
 import { ambiguousNameMessage, parseMcpHttpBody, unwrapToolResult } from "../src/bashira/mcp";
 import { applyTokenResponse, buildAuthorizeUrl, createPkce, discoverOAuth } from "../src/bashira/oauth";
-import { pageLines } from "../src/body";
-import { decideNotionTarget, firstParagraphIsBashira } from "../src/notion";
+import { footerLines, pageBlocks, pageTitle } from "../src/body";
+import { markdownToNotionBlocks, chunkChildren } from "../src/notion-blocks";
+import { blocksIncludeBashira, decideNotionTarget } from "../src/notion";
 import { interpretOdds } from "../src/odds";
 import { parseRaceRequest } from "../src/race-ref";
 import { rowsToObjects } from "../src/rows";
@@ -282,36 +283,118 @@ describe("notion matching", () => {
       }).action,
     ).toBe("error");
     expect(decideNotionTarget({ stored: null, pages: [], truncated: true }).action).toBe("error");
-    expect(firstParagraphIsBashira([{ type: "paragraph", paragraph: { rich_text: [{ plain_text: "BASHIRAで取得" }] } }])).toBe(true);
-    expect(firstParagraphIsBashira([{ type: "paragraph", paragraph: { rich_text: [{ plain_text: "Dify" }] } }])).toBe(false);
+    expect(blocksIncludeBashira([{ type: "paragraph", paragraph: { rich_text: [{ plain_text: "BASHIRAで取得" }] } }])).toBe(true);
+    expect(blocksIncludeBashira([{ type: "paragraph", paragraph: { rich_text: [{ plain_text: "Dify" }] } }])).toBe(false);
+    expect(
+      blocksIncludeBashira([
+        { type: "heading_3", heading_3: { rich_text: [{ plain_text: "レース情報" }] } },
+        { type: "paragraph", paragraph: { rich_text: [{ plain_text: "灰色 BASHIRAで取得 実行者" }] } },
+      ]),
+    ).toBe(true);
+  });
+});
+
+describe("page title", () => {
+  const race = { raceKey: "20261108-05-11", raceId: "20261108-05-11", date: "2026-11-08", venue: "東京", venueCode: "05", raceNumber: 11 };
+  it("adds a grade in fullwidth parentheses and omits an empty grade", () => {
+    expect(pageTitle(race, "アルゼンチン共和国杯", "G2")).toBe("アルゼンチン共和国杯（G2）");
+    expect(pageTitle(race, "アルゼンチン共和国杯", null)).toBe("アルゼンチン共和国杯");
+    expect(pageTitle(race, "アルゼンチン共和国杯", "平場")).toBe("アルゼンチン共和国杯");
+    expect(pageTitle(race, "アルゼンチン共和国杯", "その他重賞")).toBe("アルゼンチン共和国杯");
+    expect(pageTitle(race, "アルゼンチン共和国杯（G2）", "G2")).toBe("アルゼンチン共和国杯（G2）");
+    expect(pageTitle(race, null, null)).toBe("東京11R");
+    expect(pageTitle(race, "テストS", "G2")).not.toContain("【BASHIRA】");
   });
 });
 
 describe("page body", () => {
-  it("starts with the BASHIRA line and records models, versions, and odds", () => {
-    const lines = pageLines({
-      race: { raceKey: "20261107-03-11", raceId: "20261107-03-11", date: "2026-11-07", venue: "福島", venueCode: "03", raceNumber: 11 },
-      raceName: "テストS",
-      requestedBy: "Grok Bot",
-      odds: { source: "none", available: false, kind: null, observedAtJst: null, reason: "未発売", detail: null, horses: [] },
-      courseModel: "gemini-flash-latest",
-      raceModel: "gemini-flash-latest",
-      courseModelVersion: "gemini-course-001",
-      raceModelVersion: null,
-      coursePromptVersion: "3",
-      racePromptVersion: "4",
-      印: "◎1",
-      予想本文: "本文",
-      courseText: "分析",
-    });
-    expect(lines[0]).toBe("BASHIRAで取得");
-    expect(lines.join("\n")).toContain("course_variant: null");
-    expect(lines.join("\n")).toContain("指定モデル（course）: gemini-flash-latest");
-    expect(lines.join("\n")).toContain("応答モデル modelVersion（race）: 応答に modelVersion が無い");
-    expect(lines.join("\n")).toContain("プロンプト版（course）: 3");
-    expect(lines.join("\n")).toContain("オッズ種別: なし");
-    expect(lines.join("\n")).toContain("未発売");
-    expect(lines.join("\n")).toContain("◎1");
+  const input = {
+    race: { raceKey: "20261107-03-11", raceId: "20261107-03-11", date: "2026-11-07", venue: "福島", venueCode: "03", raceNumber: 11 },
+    raceName: "テストS",
+    requestedBy: "Grok Bot",
+    odds: { source: "none" as const, available: false, kind: null, observedAtJst: null, reason: "未発売" as const, detail: null, horses: [] },
+    courseModel: "gemini-flash-latest",
+    raceModel: "gemini-flash-latest",
+    courseModelVersion: "gemini-course-001",
+    raceModelVersion: null,
+    coursePromptVersion: "3",
+    racePromptVersion: "4",
+    印: "◎1",
+    予想本文: "本文",
+    courseText: "分析",
+  };
+
+  it("renders markdown blocks and puts system info in a gray footer", () => {
+    const blocks = pageBlocks(input);
+    expect(JSON.stringify(blocks[0])).not.toContain("BASHIRAで取得");
+    expect(blocks.some((block) => block.type === "heading_3")).toBe(true);
+    expect(blocks.some((block) => block.type === "bulleted_list_item")).toBe(true);
+    const dividerAt = blocks.findIndex((block) => block.type === "divider");
+    expect(dividerAt).toBeGreaterThan(0);
+    const footer = blocks.slice(dividerAt + 1);
+    expect(footer.length).toBeGreaterThan(0);
+    expect(footer.every((block) => (block.paragraph as { color?: string } | undefined)?.color === "gray")).toBe(true);
+    const footerText = JSON.stringify(footer);
+    expect(footerText).toContain("BASHIRAで取得");
+    expect(footerText).toContain("course_variant: null");
+    expect(footerText).toContain("指定モデル（course）: gemini-flash-latest");
+    expect(footerText).toContain("応答モデル modelVersion（race）: 応答に modelVersion が無い");
+    expect(footerText).toContain("プロンプト版（course）: 3");
+    expect(footerText).toContain("オッズ種別: なし");
+    expect(footerText).toContain("未発売");
+    expect(JSON.stringify(blocks)).toContain("◎1");
+    expect(footerLines(input)[0]).toContain("BASHIRAで取得");
+  });
+});
+
+describe("dify markdown blocks", () => {
+  it("maps headings, bold bullets, dividers, and code the way the Dify node does", () => {
+    const blocks = markdownToNotionBlocks(
+      [
+        "### レース情報",
+        "- **日付:** 2026-11-08",
+        "- **開催場:** 東京",
+        "",
+        "### 競馬新聞風印予想",
+        "- ◎ 7 サンプル",
+        "",
+        "---",
+        "## 二次（深掘り）",
+        "#### 7 サンプル",
+        "```json",
+        "{\"a\":1}",
+        "```",
+      ].join("\n"),
+    );
+    expect(blocks.map((block) => block.type)).toEqual([
+      "heading_3",
+      "bulleted_list_item",
+      "bulleted_list_item",
+      "heading_3",
+      "bulleted_list_item",
+      "divider",
+      "heading_2",
+      "heading_4",
+      "code",
+    ]);
+    const bullet = blocks[1]?.bulleted_list_item as { rich_text: Array<{ text: { content: string }; annotations?: { bold?: boolean } }> };
+    expect(bullet.rich_text[0]?.text.content).toBe("日付:");
+    expect(bullet.rich_text[0]?.annotations?.bold).toBe(true);
+    expect(bullet.rich_text[1]?.text.content).toBe(" 2026-11-08");
+    const code = blocks.at(-1)?.code as { language: string; rich_text: Array<{ text: { content: string } }> };
+    expect(code.language).toBe("json");
+    expect(code.rich_text[0]?.text.content).toBe('{"a":1}');
+  });
+
+  it("splits rich text at 2000 characters and children into chunks of 100", () => {
+    const blocks = markdownToNotionBlocks(`x${"あ".repeat(2000)}`);
+    const rich = (blocks[0]?.paragraph as { rich_text: Array<{ text: { content: string } }> }).rich_text;
+    expect(rich).toHaveLength(2);
+    expect([...rich[0]!.text.content].length).toBe(2000);
+    expect(rich[1]!.text.content).toBe("あ");
+    const many = markdownToNotionBlocks(Array.from({ length: 101 }, (_, index) => `行${index}`).join("\n"));
+    const chunks = chunkChildren(many);
+    expect(chunks.map((chunk) => chunk.length)).toEqual([100, 1]);
   });
 });
 

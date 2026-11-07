@@ -5,6 +5,7 @@
   "type": "module",
   "description": "1レースずつ BASHIRA で一次予想を作り、Notion に書く Cloudflare Worker",
   "scripts": {
+    "prepare": "node scripts/write-build-info.mjs",
     "types": "wrangler types",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

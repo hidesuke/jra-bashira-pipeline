@@ -70,6 +70,7 @@ function harness(options?: { odds?: "ok" | "error"; notion?: "create" | "ambiguo
                 surface: "芝",
                 distance: 1600,
                 race_name_main: "テストS",
+                grade: "G2",
                 race_track: "福島",
                 race_number: 11,
                 rail_type: "A",
@@ -210,8 +211,19 @@ describe("pipeline", () => {
     )[0]?.parts[0]?.text;
     expect(coursePrompt).toContain('"course_variant": null');
     const created = env.notionCalls.find((call) => call.method === "POST" && call.path === "/v1/pages");
-    const children = (created?.body as { children?: Array<{ paragraph?: { rich_text?: Array<{ text?: { content?: string } }> } }> }).children;
-    expect(children?.[0]?.paragraph?.rich_text?.[0]?.text?.content).toBe("BASHIRAで取得");
+    const createdBody = created?.body as {
+      properties?: { 名前?: { title?: Array<{ text?: { content?: string } }> } };
+      children?: Array<{ type?: string; paragraph?: { color?: string; rich_text?: Array<{ text?: { content?: string } }> } }>;
+    };
+    expect(createdBody.properties?.名前?.title?.[0]?.text?.content).toBe("テストS（G2）");
+    const children = createdBody.children;
+    expect(children?.[0]?.paragraph?.rich_text?.[0]?.text?.content).toBe("先行有利");
+    expect(children?.some((block) => block.type === "heading_3")).toBe(true);
+    expect(children?.some((block) => block.type === "bulleted_list_item")).toBe(true);
+    const footer = children?.at(-1);
+    expect(footer?.type).toBe("paragraph");
+    expect(footer?.paragraph?.color).toBe("gray");
+    expect(footer?.paragraph?.rich_text?.[0]?.text?.content).toContain("プロンプト版");
     const bodyText = JSON.stringify(children);
     expect(bodyText).toContain("指定モデル（course）: gemini-flash-latest");
     expect(bodyText).toContain("応答モデル modelVersion（course）: gemini-course-001");

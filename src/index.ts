@@ -1,4 +1,5 @@
 import { accessJwks, verifyAccessJwt } from "./access";
+import { BUILD_COMMIT } from "./build-info";
 import { cronSkipReason } from "./cron";
 import { BashiraAuth } from "./bashira/auth-do";
 import { handleRequest, type HttpDeps } from "./http";
@@ -41,6 +42,7 @@ function httpDeps(env: Env): HttpDeps {
       tag: env.CF_VERSION_METADATA.tag,
       timestamp: env.CF_VERSION_METADATA.timestamp,
     },
+    buildCommit: BUILD_COMMIT,
     verifyJwt: (token) =>
       verifyAccessJwt(token, {
         issuer: env.ACCESS_TEAM_DOMAIN,

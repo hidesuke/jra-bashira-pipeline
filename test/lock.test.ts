@@ -169,4 +169,19 @@ describe("health build id", () => {
     expect(body.commit).toBe("abc123");
     expect(body.version_id).toBe("version-1");
   });
+
+  it("uses the build-time SHA when the version tag is empty", async () => {
+    const env = setup("auth");
+    env.http.version = { id: "version-1", tag: "", timestamp: "2026-11-08T06:00:00Z" };
+    env.http.buildCommit = "deadbeef";
+    const body = (await (await handleRequest(new Request("https://worker.example/health"), env.http)).json()) as {
+      commit: string | null;
+    };
+    expect(body.commit).toBe("deadbeef");
+    env.http.buildCommit = "";
+    const empty = (await (await handleRequest(new Request("https://worker.example/health"), env.http)).json()) as {
+      commit: string | null;
+    };
+    expect(empty.commit).toBeNull();
+  });
 });

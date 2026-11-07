@@ -21,10 +21,12 @@ Git 接続の Cloudflare Workers Builds は、リポジトリ直下をルート�
 | --- | --- |
 | Worker 名 | `jra-bashira-pipeline`（`wrangler.jsonc` の `name`。Workers Builds の名前と揃える） |
 | ルートディレクトリ | `/`（リポジトリ直下） |
-| ビルドコマンド | `npm ci` |
+| ビルドコマンド | `npm ci && node scripts/write-build-info.mjs` |
 | デプロイコマンド | `npx wrangler deploy` |
 
 `npm ci` は lock と `package.json` が一致している必要があります。依存の範囲は `package.json` のままです（TypeScript 5.9、Vitest 3.2、`@types/node` 24）。
+
+`/health` の `commit` は、空でなければ `CF_VERSION_METADATA.tag` です。Workers Builds ではこの tag が空になることがあります。そのときはビルド時の `WORKERS_CI_COMMIT_SHA`（無ければ `git rev-parse HEAD`）を `src/build-info.ts` に書いて使います。`npm ci` の `prepare` と、上のビルドコマンドの両方がこのスクリプトを走らせます。Workers Builds は `wrangler.jsonc` の custom build を実行しません。スクリプトが走らず tag も空なら `commit` は `null` のままです。
 
 最初の `npx wrangler deploy` が次を作ります。id は設定に書きません。Git からの deploy では、作られた id はダッシュボードに残り、リポジトリには書き戻されません。
 
@@ -222,7 +224,7 @@ curl -sS "https://<worker>/admin/jobs?race_key=20261107-03-11" \
 
 | プロパティ | 型 | この Worker が書く値 |
 | --- | --- | --- |
-| 名前 | title | `【BASHIRA】` + レース名。レース名が無いときは場とレース番号 |
+| 名前 | title | レース名。グレードが G1 / G2 / G3 / L / OP のときは `アルゼンチン共和国杯（G2）` のように全角括弧で足す。平場・その他重賞・空は付けない。レース名が無いときは場とレース番号 |
 | 日付 | date | 開催日 |
 | 競馬場 | select | 開催場（既存の 10 場） |
 | レース | select | レース番号の文字列 `1`〜`12` |
@@ -230,11 +232,13 @@ curl -sS "https://<worker>/admin/jobs?race_key=20261107-03-11" \
 | 自信度 | rich_text | 予想 JSON の `自信度` |
 | 波乱度 | rich_text | 予想 JSON の `波乱度` |
 
-`予想結果` と `馬券結果` と `メモ` と `URL` は書きません。Dify 版と同じ開催日・競馬場・レース番号のページがあっても、本文が `BASHIRAで取得` で始まらないページは更新しません。新規ページを作ります。
+`予想結果` と `馬券結果` と `メモ` と `URL` は書きません。プロパティの型も増やしません。Dify 版と同じ開催日・競馬場・レース番号のページがあっても、本文のどこにも `BASHIRAで取得` が無いページは更新しません。新規ページを作ります。
 
-ページ id は `notion:page:v1:{raceKey}` に保存し、再実行はそのページを更新します。保存したページの日付・場・レースが違う、または `BASHIRAで取得` で始まるページが複数あるときは、どれかを選ばずにエラーで止まります。
+ページ id は `notion:page:v1:{raceKey}` に保存し、再実行はそのページを更新します。保存したページの日付・場・レースが違う、または `BASHIRAで取得` を含むページが複数あるときは、どれかを選ばずにエラーで止まります。識別は本文の末尾までページングして見ます（先頭 5 ブロックだけではフッターを見落とします）。
 
-本文の先頭行は `BASHIRAで取得` です。その後に印、予想本文、オッズ種別、オッズ観測時刻（JST）、指定モデル、応答の `modelVersion`、プロンプト版、実行者、`course_variant: null` を書きます。
+本文は Dify の「Notion用にに出力整形」と同じ規則でブロックにします。予想本文の Markdown を見出し（`#` から `####`）、箇条書き（`- ` / `* `）、`**太字**`、区切り線、コードブロックにします。印は本文に「競馬新聞風印予想」が無いとき `### 競馬新聞風印予想` の箇条書きにします。コース分析と単勝オッズも見出しにします。子ブロックの追加は 100 件ずつです。
+
+`BASHIRAで取得`、実行者、`course_variant: null`、オッズ種別、オッズ観測時刻、指定モデル、応答の `modelVersion`、プロンプト版は本文の先頭には置きません。末尾に区切り線を置き、その下を灰色の段落で書きます。
 
 ## コース成績とオッズ
 

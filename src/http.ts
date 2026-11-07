@@ -43,8 +43,17 @@ export interface HttpDeps {
   fetch?: typeof fetch;
   verifyJwt(token: string): Promise<JWTPayload>;
   oauth: OAuthPort;
-  /** Workers の version metadata。tag は Git 接続ビルドではコミット SHA になる。 */
+  /** Workers の version metadata。tag が空のときは buildCommit を見る。 */
   version?: { id: string; tag: string; timestamp: string } | null;
+  /** scripts/write-build-info.mjs が WORKERS_CI_COMMIT_SHA から埋め込んだ SHA。 */
+  buildCommit?: string | null;
+}
+
+function commitOf(deps: HttpDeps): string | null {
+  const tag = deps.version?.tag?.trim() ?? "";
+  if (tag) return tag;
+  const built = deps.buildCommit?.trim() ?? "";
+  return built || null;
 }
 
 export async function handleRequest(request: Request, deps: HttpDeps): Promise<Response> {
@@ -54,7 +63,7 @@ export async function handleRequest(request: Request, deps: HttpDeps): Promise<R
       return json({
         ok: true,
         mode: "one-race",
-        commit: deps.version?.tag || null,
+        commit: commitOf(deps),
         version_id: deps.version?.id || null,
       });
     }
