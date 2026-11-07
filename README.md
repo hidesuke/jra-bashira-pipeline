@@ -19,6 +19,7 @@ Git 接続の Cloudflare Workers Builds は、リポジトリ直下をルート�
 
 | 設定 | 値 |
 | --- | --- |
+| Worker 名 | `jra-bashira-pipeline`（`wrangler.jsonc` の `name`。Workers Builds の名前と揃える） |
 | ルートディレクトリ | `/`（リポジトリ直下） |
 | ビルドコマンド | `npm ci` |
 | デプロイコマンド | `npx wrangler deploy` |
@@ -35,11 +36,12 @@ Git 接続の Cloudflare Workers Builds は、リポジトリ直下をルート�
 
 ## シークレット
 
-次の三つは **手動** です。値をリポジトリ、コマンド引数、ログに書かないでください。`openssl rand -base64 32` で作った鍵を `TOKEN_ENCRYPTION_KEY` にします。
+次は **手動の Secret** です。値をリポジトリ、コマンド引数、ログに書かないでください。`openssl rand -base64 32` で作った鍵を `TOKEN_ENCRYPTION_KEY` にします。`ACCESS_AUD` は Access アプリケーションの AUD タグで、ダッシュボードの Secret に置きます。`vars` には書きません。
 
 - `GEMINI_API_KEY`
 - `NOTION_TOKEN`
 - `TOKEN_ENCRYPTION_KEY`
+- `ACCESS_AUD`
 
 Worker がまだ無い状態では `wrangler secret put` もダッシュボードもシークレットを先に置けないため、`secrets.required` は設定していません。最初の deploy が Worker を作ったあと、ダッシュボードの Settings → Variables and Secrets か、次で入れます。
 
@@ -47,9 +49,10 @@ Worker がまだ無い状態では `wrangler secret put` もダッシュボー�
 npx wrangler secret put GEMINI_API_KEY
 npx wrangler secret put NOTION_TOKEN
 npx wrangler secret put TOKEN_ENCRYPTION_KEY
+npx wrangler secret put ACCESS_AUD
 ```
 
-`secret put` はそれ自体がデプロイになります。レースを動かす前に三つとも入れてください。入っていないと実行時に失敗します。
+`secret put` はそれ自体がデプロイになります。レースを動かす前に入れてください。入っていないと実行時に失敗します。`ACCESS_AUD` はダッシュボードで設定済みなら、その値を上書きしないでください。
 
 ローカルの `wrangler dev` では同じ名前を `.dev.vars` に書きます。`.dev.vars.example` をコピーしてください。`.dev.vars` はコミットしません。
 
@@ -57,8 +60,7 @@ npx wrangler secret put TOKEN_ENCRYPTION_KEY
 
 | 変数 | 内容 |
 | --- | --- |
-| `ACCESS_TEAM_DOMAIN` | `https://<team>.cloudflareaccess.com` |
-| `ACCESS_AUD` | Access アプリケーションの AUD タグ |
+| `ACCESS_TEAM_DOMAIN` | `https://hdsk.cloudflareaccess.com`（`wrangler.jsonc` に設定済み） |
 | `ACCESS_CLIENT_ID_GROK` | Grok Bot の Access サービストークンの Client ID |
 | `ACCESS_CLIENT_ID_MUSE` | Muse の Client ID |
 
@@ -75,14 +77,14 @@ npm run check
 
 `/run` と `/admin/*` と `/oauth/start` と `/oauth/status` は Access の JWT が必要です。`/health` と `/oauth/callback` は公開です。callback は `state` と PKCE で紐づけます。
 
-Access アプリケーションを Worker の URL に置き、ポリシーに Grok Bot と Muse のサービストークンを入れます。アプリケーションの AUD を `ACCESS_AUD` にコピーします。
+Access アプリケーションを Worker の URL に置き、ポリシーに Grok Bot と Muse のサービストークンを入れます。アプリケーションの AUD は Secret `ACCESS_AUD` です。設定ファイルには書きません。
 
 Worker は次を検証します。
 
 - ヘッダ `Cf-Access-Jwt-Assertion` がある
-- 署名が `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs` の公開鍵と一致する
-- `iss` がそのチームドメインである
-- `aud` が `ACCESS_AUD` と一致する
+- 署名が `https://hdsk.cloudflareaccess.com/cdn-cgi/access/certs` の公開鍵と一致する
+- `iss` が `https://hdsk.cloudflareaccess.com` である
+- `aud` が Secret の `ACCESS_AUD` と一致する
 - 有効期限が切れていない
 
 呼び出し元の記録は、`CF-Access-Client-Id` が `ACCESS_CLIENT_ID_GROK` / `ACCESS_CLIENT_ID_MUSE` と一致すれば「Grok Bot」「Muse」です。一致しなければ JWT の `common_name`（名前に grok / muse を含む場合も同じラベル）か email を使います。Client Secret は読みません。

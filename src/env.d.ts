@@ -4,4 +4,6 @@ interface Env {
   GEMINI_API_KEY: string;
   NOTION_TOKEN: string;
   TOKEN_ENCRYPTION_KEY: string;
+  // ダッシュボードの Secret。vars には置かない。
+  ACCESS_AUD: string;
 }
