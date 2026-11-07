@@ -4,6 +4,127 @@ export interface JsonRpcMessage {
   error?: { message?: string; code?: number };
 }
 
+/** MCP のセッション ID は任意。無いときは後続リクエストにも付けない。 */
+export interface McpSession {
+  id: string | null;
+  protocol: string;
+}
+
+export class McpStatusError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "McpStatusError";
+  }
+}
+
+const MCP_PROTOCOLS = ["2025-06-18", "2025-03-26"] as const;
+
+export function readMcpSessionId(header: string | null): string | null {
+  const value = header?.trim() ?? "";
+  return value === "" ? null : value;
+}
+
+export function mcpJsonHeaders(token: string, session: McpSession | null): Record<string, string> {
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${token}`,
+    accept: "application/json, text/event-stream",
+    "content-type": "application/json",
+  };
+  if (!session) return headers;
+  headers["mcp-protocol-version"] = session.protocol;
+  if (session.id) headers["mcp-session-id"] = session.id;
+  return headers;
+}
+
+type McpFetch = (url: string, init?: RequestInit) => Promise<Response>;
+
+export async function initializeMcpSession(input: {
+  url: string;
+  token: string;
+  fetchImpl: McpFetch;
+  nextId: () => number;
+  clientInfo: { name: string; version: string };
+}): Promise<{ session: McpSession; result: unknown }> {
+  let last: unknown;
+  for (const protocol of MCP_PROTOCOLS) {
+    const response = await input.fetchImpl(input.url, {
+      method: "POST",
+      headers: mcpJsonHeaders(input.token, null),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: input.nextId(),
+        method: "initialize",
+        params: {
+          protocolVersion: protocol,
+          capabilities: {},
+          clientInfo: input.clientInfo,
+        },
+      }),
+    });
+    if (response.status === 401) throw new McpStatusError(401, "MCP initialize が 401 を返しました");
+    const text = await response.text();
+    if (!response.ok) {
+      last = new Error(`MCP initialize HTTP ${response.status}: ${text.slice(0, 300)}`);
+      continue;
+    }
+    let message: JsonRpcMessage;
+    try {
+      message = parseMcpHttpBody(response.headers.get("content-type") ?? "", text);
+    } catch (err) {
+      last = err;
+      continue;
+    }
+    if (message.error) {
+      last = new Error(message.error.message ?? "MCP initialize に失敗しました");
+      continue;
+    }
+    const session: McpSession = {
+      id: readMcpSessionId(response.headers.get("mcp-session-id")),
+      protocol,
+    };
+    await postMcp({
+      url: input.url,
+      token: input.token,
+      session,
+      fetchImpl: input.fetchImpl,
+      notification: true,
+      body: { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+    });
+    return { session, result: message.result };
+  }
+  throw last instanceof Error ? last : new Error("MCP initialize に失敗しました");
+}
+
+export async function postMcp(input: {
+  url: string;
+  token: string;
+  session: McpSession;
+  fetchImpl: McpFetch;
+  body: unknown;
+  notification?: boolean;
+}): Promise<{ result: unknown }> {
+  const response = await input.fetchImpl(input.url, {
+    method: "POST",
+    headers: mcpJsonHeaders(input.token, input.session),
+    body: JSON.stringify(input.body),
+  });
+  const text = await response.text();
+  if (response.status === 401 || response.status === 404) {
+    throw new McpStatusError(response.status, text.slice(0, 300));
+  }
+  if (input.notification && (response.status === 202 || response.ok || text.trim() === "")) {
+    return { result: null };
+  }
+  if (!response.ok) throw new Error(`MCP HTTP ${response.status}: ${text.slice(0, 400)}`);
+  if (!text.trim()) return { result: null };
+  const message = parseMcpHttpBody(response.headers.get("content-type") ?? "", text);
+  if (message.error) throw new Error(message.error.message ?? "MCP が失敗しました");
+  return { result: message.result };
+}
+
 export function parseMcpHttpBody(contentType: string, text: string): JsonRpcMessage {
   const trimmed = text.trim();
   if (!trimmed) throw new Error("MCP の応答ボディが空です");
