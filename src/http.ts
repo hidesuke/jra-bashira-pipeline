@@ -43,13 +43,20 @@ export interface HttpDeps {
   fetch?: typeof fetch;
   verifyJwt(token: string): Promise<JWTPayload>;
   oauth: OAuthPort;
+  /** Workers の version metadata。tag は Git 接続ビルドではコミット SHA になる。 */
+  version?: { id: string; tag: string; timestamp: string } | null;
 }
 
 export async function handleRequest(request: Request, deps: HttpDeps): Promise<Response> {
   const url = new URL(request.url);
   try {
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, mode: "one-race" });
+      return json({
+        ok: true,
+        mode: "one-race",
+        commit: deps.version?.tag || null,
+        version_id: deps.version?.id || null,
+      });
     }
     if (request.method === "GET" && url.pathname === "/oauth/callback") {
       return await oauthCallback(url, deps);

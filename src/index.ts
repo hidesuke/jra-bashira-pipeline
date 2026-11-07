@@ -3,7 +3,7 @@ import { cronSkipReason } from "./cron";
 import { BashiraAuth } from "./bashira/auth-do";
 import { handleRequest, type HttpDeps } from "./http";
 import { handleJobMessage, type AppConfig, type PipelineDeps } from "./pipeline";
-import { type JobMessage } from "./types";
+import { QUEUE_MAX_RETRIES, type JobMessage } from "./types";
 
 export { BashiraAuth };
 
@@ -36,6 +36,11 @@ function httpDeps(env: Env): HttpDeps {
       await env.RACE_QUEUE.send(message);
     },
     now: () => new Date(),
+    version: {
+      id: env.CF_VERSION_METADATA.id,
+      tag: env.CF_VERSION_METADATA.tag,
+      timestamp: env.CF_VERSION_METADATA.timestamp,
+    },
     verifyJwt: (token) =>
       verifyAccessJwt(token, {
         issuer: env.ACCESS_TEAM_DOMAIN,
@@ -77,7 +82,10 @@ export default {
   async queue(batch: MessageBatch, env: Env): Promise<void> {
     const deps = pipelineDeps(env);
     for (const message of batch.messages) {
-      const decision = await handleJobMessage(message.body as JobMessage, deps);
+      const decision = await handleJobMessage(message.body as JobMessage, deps, {
+        attempt: message.attempts,
+        maxRetries: QUEUE_MAX_RETRIES,
+      });
       if (decision === "retry") message.retry();
       else message.ack();
     }
