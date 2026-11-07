@@ -1,8 +1,11 @@
 import type { FormTask } from "./form";
 import type { OddsSummary } from "./odds";
 import type { StatTask } from "./stats";
-import { kvGetJson, kvPutJson, keys } from "./kv";
+import { keys, kvGetJson, kvPutJson, sleepMs } from "./kv";
 import type { KvStore, RaceRef } from "./types";
+
+/** 同じジョブキーへの書き込み間隔。KV の 1 秒制限より少し長く取る。 */
+export const JOB_WRITE_MIN_INTERVAL_MS = 1_100;
 
 export interface StoredPrediction {
   courseText: string;
@@ -45,6 +48,53 @@ export async function loadJob(kv: KvStore, raceKey: string): Promise<JobState | 
   return kvGetJson<JobState>(kv, keys.job(raceKey));
 }
 
-export async function saveJob(kv: KvStore, state: JobState): Promise<void> {
-  await kvPutJson(kv, keys.job(state.race.raceKey), state);
+export async function saveJob(
+  kv: KvStore,
+  state: JobState,
+  sleep?: (ms: number) => Promise<void>,
+): Promise<void> {
+  await kvPutJson(kv, keys.job(state.race.raceKey), state, undefined, sleep);
+}
+
+/**
+ * 1 配送のあいだ、ジョブ状態はメモリに置き、同じキーは約 1 秒に 1 回だけ KV へ書く。
+ * バッチの途中は間隔が空いたときだけ残し、終わりは必ず書く（直前の書き込みから 1.1 秒未満なら待つ）。
+ */
+export class JobWriter {
+  private lastWriteMs: number | null = null;
+  private readonly startedMs: number;
+
+  constructor(
+    private readonly kv: KvStore,
+    private readonly nowMs: () => number = Date.now,
+    private readonly sleep: (ms: number) => Promise<void> = sleepMs,
+  ) {
+    this.startedMs = nowMs();
+  }
+
+  hasWritten(): boolean {
+    return this.lastWriteMs != null;
+  }
+
+  /** 直前の書き込み（無ければこの配送の開始）から 1.1 秒以上経っていれば書く。 */
+  async saveIfDue(state: JobState): Promise<void> {
+    const now = this.nowMs();
+    const anchor = this.lastWriteMs ?? this.startedMs;
+    if (now - anchor < JOB_WRITE_MIN_INTERVAL_MS) return;
+    await this.write(state);
+  }
+
+  /** 最新の状態を必ず残す。間隔が足りなければ 1.1 秒が空くまで待つ。 */
+  async flush(state: JobState): Promise<void> {
+    const now = this.nowMs();
+    if (this.lastWriteMs != null && now - this.lastWriteMs < JOB_WRITE_MIN_INTERVAL_MS) {
+      await this.sleep(JOB_WRITE_MIN_INTERVAL_MS - (now - this.lastWriteMs));
+    }
+    await this.write(state);
+  }
+
+  private async write(state: JobState): Promise<void> {
+    await saveJob(this.kv, state, this.sleep);
+    this.lastWriteMs = this.nowMs();
+  }
 }

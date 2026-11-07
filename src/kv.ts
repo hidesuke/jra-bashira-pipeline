@@ -21,13 +21,43 @@ export async function kvGetJson<T>(kv: KvStore, key: string): Promise<T | null> 
   }
 }
 
+/** 429 の待ち。1 秒から倍々で、数回まで。 */
+export const KV_PUT_BACKOFF_MS = [1_000, 2_000, 4_000] as const;
+
+export function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/** Workers KV の「同一キーは 1 秒に 1 回」で返る 429。 */
+export function isKvRateLimit(err: unknown): boolean {
+  if (typeof err === "object" && err !== null && "status" in err && (err as { status?: unknown }).status === 429) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("429") || message.includes("Too Many Requests");
+}
+
 export async function kvPutJson(
   kv: KvStore,
   key: string,
   value: unknown,
   expirationTtl?: number,
+  sleep: (ms: number) => Promise<void> = sleepMs,
 ): Promise<void> {
-  await kv.put(key, JSON.stringify(value), expirationTtl ? { expirationTtl } : undefined);
+  const body = JSON.stringify(value);
+  const options = expirationTtl ? { expirationTtl } : undefined;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await kv.put(key, body, options);
+      return;
+    } catch (err) {
+      const wait = KV_PUT_BACKOFF_MS[attempt];
+      if (wait == null || !isKvRateLimit(err)) throw err;
+      await sleep(wait);
+    }
+  }
 }
 
 export class MemoryKv implements KvStore {
