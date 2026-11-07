@@ -126,7 +126,11 @@ export async function hydrateStatCache(tasks: StatTask[], kv: KvStore): Promise<
       const cached = await kv.get(task.cacheKey);
       if (!cached) return;
       task.status = "done";
-      task.result = JSON.parse(cached) as unknown;
+      try {
+        task.result = JSON.parse(cached) as unknown;
+      } catch {
+        throw new JobError(`KV の ${task.cacheKey} を JSON として読めません`, false);
+      }
       task.note = "KV cache";
     }),
   );

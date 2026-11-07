@@ -1,11 +1,10 @@
-import { readFileSync } from "node:fs";
 import { generateKeyPair, SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
 import { identifyCaller, verifyAccessJwt } from "../src/access";
 import { ExternalBudget, budgetedFetch } from "../src/budget";
 import { cronSkipReason } from "../src/cron";
 import { decryptJson, encryptJson, importAesKey, safeEqual } from "../src/crypto-util";
-import { composeRemarks, fillCourseUser, fillRaceUser, mergeGoing } from "../src/dify-input";
+import { composeRemarks, COURSE_USER_TOKENS, fillCourseUser, fillRaceUser, mergeGoing, RACE_USER_TOKENS } from "../src/dify-input";
 import { extractRaceMarkdown } from "../src/extract-prediction";
 import { PAST_RUN_LIMIT, selectPastRuns } from "../src/form";
 import { parseRacePrediction } from "../src/gemini";
@@ -445,43 +444,31 @@ describe("dify markdown blocks", () => {
 describe("dify v1 inputs", () => {
   const race = { raceKey: "20261107-03-11", raceId: "20261107-03-11", date: "2026-11-07", venue: "福島", venueCode: "03", raceNumber: 11 };
 
-  it("keeps the Dify race prompt text and leaves stats out of the course prompt", () => {
-    const system = readFileSync("prompts/v1/race_system.md", "utf8");
-    const user = readFileSync("prompts/v1/race_user.md", "utf8");
-    const courseSystem = readFileSync("prompts/v1/course_system.md", "utf8");
-    const courseUser = readFileSync("prompts/v1/course_user.md", "utf8");
-    expect(system.startsWith("# あなたの役割と目的")).toBe(true);
-    expect(user).toContain("{{#1788721223615.output#}}");
-    expect(user).toContain("{{#1788103991048.weathre#}}");
-    expect(user).not.toContain("get_stats");
-    expect(courseSystem.startsWith("# 役割と目的")).toBe(true);
-    expect(courseSystem).not.toContain("地方競馬");
-    expect(courseUser).toContain("{{#1788717846587.course#}}");
-    expect(courseUser).toContain("{{#1788717846587.type#}} {{#1788717846587.distance#}}");
-    expect(courseUser).not.toContain("get_stats");
-  });
-
   it("fills only the Dify user slots", () => {
-    const filled = fillRaceUser(readFileSync("prompts/v1/race_user.md", "utf8"), {
-      umabashira: "馬柱本文",
-      course: "コース本文",
-      weather: "晴",
-      condition: "良",
-      remarks: "なし",
-    });
-    expect(filled).toContain("馬柱本文");
-    expect(filled).toContain("コース本文");
+    const filled = fillRaceUser(
+      [
+        RACE_USER_TOKENS.umabashira,
+        RACE_USER_TOKENS.course,
+        RACE_USER_TOKENS.weather,
+        RACE_USER_TOKENS.condition,
+        RACE_USER_TOKENS.remarks,
+      ].join("\n"),
+      {
+        umabashira: "馬柱本文",
+        course: "コース本文",
+        weather: "晴",
+        condition: "良",
+        remarks: "なし",
+      },
+    );
+    expect(filled).toBe(["馬柱本文", "コース本文", "晴", "良", "なし"].join("\n"));
     expect(filled).not.toContain("{{#");
-    expect(filled).not.toContain("min_starts");
-    const course = fillCourseUser(readFileSync("prompts/v1/course_user.md", "utf8"), {
-      course: "福島",
-      type: "芝",
-      distance: "1600",
-    });
-    expect(course).toContain("競馬場: 福島");
-    expect(course).toContain("芝 1600");
+    const course = fillCourseUser(
+      [COURSE_USER_TOKENS.course, COURSE_USER_TOKENS.type, COURSE_USER_TOKENS.distance].join("\n"),
+      { course: "福島", type: "芝", distance: "1600" },
+    );
+    expect(course).toBe(["福島", "芝", "1600"].join("\n"));
     expect(course).not.toContain("{{#");
-    expect(course).not.toContain("min_starts");
   });
 
   it("lets BASHIRA weather and going override baba, and keeps cushion and moisture", () => {
@@ -589,8 +576,17 @@ describe("dify v1 inputs", () => {
     expect(fields).toMatchObject({ 指数分布: "1強・独走型", 自信度: "A", 波乱度: "堅実" });
     expect(fields.印).toContain("◎ 1 ア");
     const kv = new MemoryKv();
-    await kv.put(keys.prompt("race"), JSON.stringify({ version: "1.0.0", text: "古い本文" }));
+    await expect(loadPrompt(kv, "race")).rejects.toThrow(/prompt:v2:race/);
+    await kv.put(keys.prompt("race"), "not-json SECRET_PROMPT_BODY");
+    await expect(loadPrompt(kv, "race")).rejects.toThrow("KV の prompt:v2:race を JSON として読めません");
+    await kv.put(keys.prompt("race"), JSON.stringify({ version: "v1", text: "legacy" }));
     await expect(loadPrompt(kv, "race")).rejects.toThrow(/system/);
+    await kv.put(keys.prompt("race"), JSON.stringify({ version: " ", system: "s", user: "u" }));
+    await expect(loadPrompt(kv, "race")).rejects.toThrow(/version/);
+    await kv.put(keys.prompt("race"), JSON.stringify({ version: "v1", system: "s", user: " " }));
+    await expect(loadPrompt(kv, "race")).rejects.toThrow(/user/);
+    await kv.put(keys.prompt("course"), JSON.stringify({ version: " v1 ", system: "s", user: "u" }));
+    await expect(loadPrompt(kv, "course")).resolves.toEqual({ version: "v1", system: "s", user: "u" });
   });
 });
 
