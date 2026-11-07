@@ -31,6 +31,7 @@ import {
   errorMessage,
   isRetryable,
   JobError,
+  EXTERNAL_BUDGET,
   LOCK_TTL_SECONDS,
   STATS_BATCH_SIZE,
   type JobMessage,
@@ -65,7 +66,15 @@ export interface PipelineDeps {
   sleep?: (ms: number) => Promise<void>;
   /** 1 配送で共有する。handleJobMessage が無ければ作る。 */
   jobWriter?: JobWriter;
+  /** テストで Notion 段の外部呼び出し上限を下げる。未指定なら EXTERNAL_BUDGET。 */
+  externalBudget?: number;
 }
+
+/** ページ ID を保存したあとの分割回数。Queue の max_retries では本文の続きを打ち切らない。 */
+export const NOTION_CONTINUATION_LIMIT = 8;
+
+const NOTION_CONTINUE_MESSAGE =
+  "Notion 本文の差し替えがサブリクエスト上限に近づいたため、次の呼び出しで続けます";
 
 const RACE_COLUMNS = [
   "race_id",
@@ -128,6 +137,7 @@ export async function handleJobMessage(
     await dispatch(message, bound);
     return "ack";
   } catch (err) {
+    if (await continueNotionLater(message, bound, err)) return "ack";
     const retry = isRetryable(err) && !isFinalAttempt(delivery);
     const persisted = await persistFailure(message, bound, err, retry);
     if (!retry && persisted) await releaseLock(bound.kv, raceKeyOf(message));
@@ -445,43 +455,9 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
 
 async function runNotion(state: JobState, deps: PipelineDeps): Promise<void> {
   if (!state.prediction || !state.odds) throw new JobError("予想結果が無いため Notion に書けません", false);
-  const budget = new ExternalBudget();
+  const budget = new ExternalBudget(deps.externalBudget ?? EXTERNAL_BUDGET);
   const token = deps.config.notionToken;
   const databaseId = deps.config.notionDatabaseId;
-  const schema = await notionOk(budget, token, `/databases/${databaseId}`, { method: "GET" }, deps.fetch);
-  const options = assertDatabaseSchema(schema as NotionSchema);
-  assertSelectValues(state.race, options);
-  const storedId = await deps.kv.get(keys.notionPage(state.race.raceKey));
-  const stored = await loadStoredPage(budget, token, storedId, state.race, deps.fetch);
-  const query = await notionOk(
-    budget,
-    token,
-    `/databases/${databaseId}/query`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        page_size: 20,
-        filter: {
-          and: [
-            { property: "日付", date: { equals: state.race.date } },
-            { property: "競馬場", select: { equals: state.race.venue } },
-            { property: "レース", select: { equals: String(state.race.raceNumber) } },
-          ],
-        },
-      }),
-    },
-    deps.fetch,
-  );
-  const queryBody = query as { has_more?: boolean; results?: Array<{ id?: string }> };
-  const results = queryBody.results ?? [];
-  const truncated = Boolean(queryBody.has_more) || results.length > 8;
-  const pages = [];
-  for (const result of results.slice(0, 8)) {
-    if (!result.id) continue;
-    pages.push({ id: result.id, isBashira: await pageHasBashiraMarker(budget, token, result.id, deps.fetch) });
-  }
-  const decision = decideNotionTarget({ stored, pages, truncated });
-  if (decision.action === "error") throw new JobError(decision.message, false);
   const raceName = state.raceRow ? stringField(state.raceRow, "race_name_main") : null;
   const grade = state.raceRow ? stringField(state.raceRow, "grade") : null;
   const properties = notionProperties({
@@ -506,35 +482,215 @@ async function runNotion(state: JobState, deps: PipelineDeps): Promise<void> {
     予想本文: state.prediction.予想本文,
     courseText: state.prediction.courseText,
   });
-  let pageId: string;
-  if (decision.action === "create") {
-    const [first, ...rest] = chunkChildren(children);
-    const created = await notionOk(
+  if (state.notionPageId) {
+    await resumeNotionPage(state, deps, budget, token, databaseId, children);
+    return;
+  }
+  await publishNotionPage(state, deps, budget, token, databaseId, properties, children);
+}
+
+async function publishNotionPage(
+  state: JobState,
+  deps: PipelineDeps,
+  budget: ExternalBudget,
+  token: string,
+  databaseId: string,
+  properties: Record<string, unknown>,
+  children: Array<Record<string, unknown>>,
+): Promise<void> {
+  ensureNotionRoom(budget);
+  const schema = await notionOk(budget, token, `/databases/${databaseId}`, { method: "GET" }, deps.fetch);
+  const options = assertDatabaseSchema(schema as NotionSchema);
+  assertSelectValues(state.race, options);
+  const storedId = await deps.kv.get(keys.notionPage(state.race.raceKey));
+  const stored = storedId ? await readStoredPage(budget, token, storedId, state.race, deps.fetch) : null;
+  const { pages, truncated } = await searchRacePages(budget, token, databaseId, state.race, deps.fetch);
+  const marked = [];
+  for (const page of pages) {
+    marked.push({ id: page.id, isBashira: await pageHasBashiraMarker(budget, token, page.id, deps.fetch) });
+  }
+  const decision = decideNotionTarget({ stored, pages: marked, truncated });
+  if (decision.action === "error") throw new JobError(decision.message, false);
+  if (decision.action === "resume") throw new JobError("作成済みの Notion ページを再開できません", false);
+  const oldId = decision.action === "update" ? decision.pageId : null;
+  await createNotionPage(state, deps, budget, token, databaseId, properties, children, oldId);
+  await appendRemaining(state, deps, budget, token, children);
+  await archiveOldPage(state, deps, budget, token);
+  await finishNotion(state, deps);
+}
+
+async function resumeNotionPage(
+  state: JobState,
+  deps: PipelineDeps,
+  budget: ExternalBudget,
+  token: string,
+  databaseId: string,
+  children: Array<Record<string, unknown>>,
+): Promise<void> {
+  const pageId = state.notionPageId;
+  if (!pageId) throw new JobError("作成済みの Notion ページがありません", false);
+  ensureNotionRoom(budget);
+  const response = await notionFetch(budget, token, `/pages/${pageId}`, { method: "GET" }, deps.fetch);
+  if (response.status === 404) throw new JobError("作成済みの Notion ページが見つかりません", false);
+  if (response.status >= 400) throw notionStatus(response.status, response.body);
+  if (pageIsTrashed(response.body)) throw new JobError("作成済みの Notion ページはアーカイブされています", false);
+  if (!pageMatchesRace(response.body, state.race)) {
+    throw new JobError("KV の Notion ページは日付・競馬場・レースが一致しません。別ページを推測しないので止めます", false);
+  }
+  const { pages, truncated } = await searchRacePages(budget, token, databaseId, state.race, deps.fetch);
+  const decision = decideNotionTarget({
+    stored: { id: pageId, found: true, matchesRace: true },
+    pages: pages.map((page) => ({
+      id: page.id,
+      isBashira: page.id === pageId || page.id === state.notionArchivePageId,
+    })),
+    truncated,
+    resumePageId: pageId,
+  });
+  if (decision.action === "error") throw new JobError(decision.message, false);
+  if (decision.action !== "resume") throw new JobError("作成済みの Notion ページを再開できません", false);
+  await deps.kv.put(keys.notionPage(state.race.raceKey), pageId);
+  await appendRemaining(state, deps, budget, token, children);
+  await archiveOldPage(state, deps, budget, token);
+  await finishNotion(state, deps);
+}
+
+async function createNotionPage(
+  state: JobState,
+  deps: PipelineDeps,
+  budget: ExternalBudget,
+  token: string,
+  databaseId: string,
+  properties: Record<string, unknown>,
+  children: Array<Record<string, unknown>>,
+  oldId: string | null,
+): Promise<void> {
+  ensureNotionRoom(budget);
+  const [first] = chunkChildren(children);
+  const created = await notionOk(
+    budget,
+    token,
+    "/pages",
+    {
+      method: "POST",
+      body: JSON.stringify({ parent: { database_id: databaseId }, properties, children: first ?? [] }),
+    },
+    deps.fetch,
+  );
+  const id = (created as { id?: unknown }).id;
+  if (typeof id !== "string") throw new JobError("Notion がページ ID を返しませんでした", true);
+  state.notionPageId = id;
+  state.notionArchivePageId = oldId;
+  state.notionBlocksWritten = first?.length ?? 0;
+  state.updatedAt = deps.now().toISOString();
+  await commitJob(deps, state);
+  await deps.kv.put(keys.notionPage(state.race.raceKey), id);
+}
+
+async function appendRemaining(
+  state: JobState,
+  deps: PipelineDeps,
+  budget: ExternalBudget,
+  token: string,
+  children: Array<Record<string, unknown>>,
+): Promise<void> {
+  const pageId = state.notionPageId;
+  if (!pageId) throw new JobError("Notion のページ ID がありません", false);
+  const rest = children.slice(state.notionBlocksWritten ?? 0);
+  for (const chunk of chunkChildren(rest)) {
+    ensureNotionRoom(budget);
+    await notionOk(
       budget,
       token,
-      "/pages",
-      {
-        method: "POST",
-        body: JSON.stringify({ parent: { database_id: databaseId }, properties, children: first ?? [] }),
-      },
+      `/blocks/${pageId}/children`,
+      { method: "PATCH", body: JSON.stringify({ children: chunk }) },
       deps.fetch,
     );
-    const id = (created as { id?: unknown }).id;
-    if (typeof id !== "string") throw new JobError("Notion がページ ID を返しませんでした", true);
-    pageId = id;
-    await appendChildren(budget, token, pageId, rest.flat(), deps.fetch);
-  } else {
-    pageId = decision.pageId;
-    await notionOk(budget, token, `/pages/${pageId}`, { method: "PATCH", body: JSON.stringify({ properties }) }, deps.fetch);
-    await replaceChildren(budget, token, pageId, children, deps.fetch);
+    state.notionBlocksWritten = (state.notionBlocksWritten ?? 0) + chunk.length;
+    state.updatedAt = deps.now().toISOString();
+    await commitJob(deps, state);
   }
-  await deps.kv.put(keys.notionPage(state.race.raceKey), pageId);
-  state.notionPageId = pageId;
+}
+
+async function archiveOldPage(
+  state: JobState,
+  deps: PipelineDeps,
+  budget: ExternalBudget,
+  token: string,
+): Promise<void> {
+  const oldId = state.notionArchivePageId;
+  if (!oldId || oldId === state.notionPageId) return;
+  ensureNotionRoom(budget);
+  const response = await notionFetch(
+    budget,
+    token,
+    `/pages/${oldId}`,
+    { method: "PATCH", body: JSON.stringify({ archived: true }) },
+    deps.fetch,
+  );
+  if (response.status !== 404 && response.status >= 400) throw notionStatus(response.status, response.body);
+}
+
+async function finishNotion(state: JobState, deps: PipelineDeps): Promise<void> {
   state.phase = "done";
   state.error = undefined;
+  state.notionArchivePageId = null;
   state.updatedAt = deps.now().toISOString();
   await commitJob(deps, state);
   await releaseLock(deps.kv, state.race.raceKey);
+}
+
+function ensureNotionRoom(budget: ExternalBudget): void {
+  if (budget.remaining < 1) throw new JobError(NOTION_CONTINUE_MESSAGE, true);
+}
+
+function isNotionBudgetStop(err: unknown): boolean {
+  return err instanceof JobError && err.retryable && err.message.includes("サブリクエスト");
+}
+
+async function searchRacePages(
+  budget: ExternalBudget,
+  token: string,
+  databaseId: string,
+  race: RaceRef,
+  fetcher?: typeof fetch,
+): Promise<{ pages: Array<{ id: string }>; truncated: boolean }> {
+  ensureNotionRoom(budget);
+  const query = await notionOk(
+    budget,
+    token,
+    `/databases/${databaseId}/query`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        page_size: 20,
+        filter: {
+          and: [
+            { property: "日付", date: { equals: race.date } },
+            { property: "競馬場", select: { equals: race.venue } },
+            { property: "レース", select: { equals: String(race.raceNumber) } },
+          ],
+        },
+      }),
+    },
+    fetcher,
+  );
+  const queryBody = query as { has_more?: boolean; results?: Array<{ id?: string }> };
+  const results = queryBody.results ?? [];
+  const pages = results.slice(0, 8).flatMap((result) => (result.id ? [{ id: result.id }] : []));
+  return { pages, truncated: Boolean(queryBody.has_more) || results.length > 8 };
+}
+
+async function readStoredPage(
+  budget: ExternalBudget,
+  token: string,
+  storedId: string,
+  race: RaceRef,
+  fetcher?: typeof fetch,
+): Promise<{ id: string; found: boolean; matchesRace: boolean }> {
+  ensureNotionRoom(budget);
+  const page = await loadStoredPage(budget, token, storedId, race, fetcher);
+  return page ?? { id: storedId, found: false, matchesRace: false };
 }
 
 async function loadStoredPage(
@@ -548,8 +704,13 @@ async function loadStoredPage(
   const response = await notionFetch(budget, token, `/pages/${storedId}`, { method: "GET" }, fetcher);
   if (response.status === 404) return { id: storedId, found: false, matchesRace: false };
   if (response.status >= 400) throw notionStatus(response.status, response.body);
-  const archived = Boolean((response.body as { archived?: boolean }).archived);
-  return { id: storedId, found: !archived, matchesRace: pageMatchesRace(response.body, race) };
+  return { id: storedId, found: !pageIsTrashed(response.body), matchesRace: pageMatchesRace(response.body, race) };
+}
+
+function pageIsTrashed(page: unknown): boolean {
+  if (!page || typeof page !== "object") return false;
+  const record = page as { archived?: boolean; in_trash?: boolean };
+  return Boolean(record.archived || record.in_trash);
 }
 
 async function pageHasBashiraMarker(
@@ -560,6 +721,7 @@ async function pageHasBashiraMarker(
 ): Promise<boolean> {
   let cursor: string | undefined;
   for (let page = 0; page < 8; page++) {
+    ensureNotionRoom(budget);
     const query = new URLSearchParams({ page_size: "100" });
     if (cursor) query.set("start_cursor", cursor);
     const children = await notionOk(budget, token, `/blocks/${pageId}/children?${query.toString()}`, { method: "GET" }, fetcher);
@@ -569,49 +731,6 @@ async function pageHasBashiraMarker(
     cursor = body.next_cursor;
   }
   return false;
-}
-
-async function replaceChildren(
-  budget: ExternalBudget,
-  token: string,
-  pageId: string,
-  children: Array<Record<string, unknown>>,
-  fetcher?: typeof fetch,
-): Promise<void> {
-  for (;;) {
-    if (budget.remaining < 3) {
-      throw new JobError("Notion 本文の差し替えがサブリクエスト上限に近づいたため、次の呼び出しで続けます", true);
-    }
-    const listed = await notionOk(budget, token, `/blocks/${pageId}/children?page_size=20`, { method: "GET" }, fetcher);
-    const blocks = ((listed as { results?: Array<{ id?: string }> }).results ?? []).filter((block) => block.id);
-    if (blocks.length === 0) break;
-    for (const block of blocks) {
-      if (budget.remaining < 2) {
-        throw new JobError("Notion 本文の差し替えがサブリクエスト上限に近づいたため、次の呼び出しで続けます", true);
-      }
-      const removed = await notionFetch(budget, token, `/blocks/${block.id}`, { method: "DELETE" }, fetcher);
-      if (removed.status >= 400 && removed.status !== 404) throw notionStatus(removed.status, removed.body);
-    }
-  }
-  await appendChildren(budget, token, pageId, children, fetcher);
-}
-
-async function appendChildren(
-  budget: ExternalBudget,
-  token: string,
-  pageId: string,
-  children: Array<Record<string, unknown>>,
-  fetcher?: typeof fetch,
-): Promise<void> {
-  for (const chunk of chunkChildren(children)) {
-    await notionOk(
-      budget,
-      token,
-      `/blocks/${pageId}/children`,
-      { method: "PATCH", body: JSON.stringify({ children: chunk }) },
-      fetcher,
-    );
-  }
 }
 
 async function notionOk(
@@ -658,6 +777,25 @@ async function enqueuePhase(state: JobState, deps: PipelineDeps): Promise<void> 
   } else if (state.phase === "notion") {
     await deps.enqueue({ kind: "notion", runId: state.runId, raceKey: state.race.raceKey });
   }
+}
+
+/**
+ * ページ ID を保存したあとの予算切れは、Queue の最終試行でも phase=error にしない。
+ * 新しい notion メッセージを積む（attempts は 1 から）。旧ページはまだアーカイブしない。
+ */
+async function continueNotionLater(message: JobMessage, deps: PipelineDeps, err: unknown): Promise<boolean> {
+  if (message.kind !== "notion" || !isNotionBudgetStop(err)) return false;
+  const state = await loadJob(deps.kv, message.raceKey);
+  if (!state || state.runId !== message.runId || state.phase === "done" || state.phase === "error") return false;
+  if (!state.notionPageId) return false;
+  const next = (state.notionContinuations ?? 0) + 1;
+  if (next > NOTION_CONTINUATION_LIMIT) return false;
+  state.notionContinuations = next;
+  state.updatedAt = deps.now().toISOString();
+  await commitJob(deps, state);
+  await deps.enqueue({ kind: "notion", runId: state.runId, raceKey: state.race.raceKey });
+  deps.log?.("notion_continue", { raceKey: state.race.raceKey, continuations: next });
+  return true;
 }
 
 /** 失敗理由をジョブに残す。保存自体が失敗しても投げず、元のエラーを隠さない。 */
