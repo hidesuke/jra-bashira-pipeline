@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { decryptJson, encryptJson, importAesKey, safeEqual } from "../crypto-util";
 import { DO_EXTERNAL_BUDGET } from "../types";
-import { parseMcpHttpBody, unwrapToolResult } from "./mcp";
+import { initializeMcpSession, McpStatusError, postMcp, unwrapToolResult, type McpSession } from "./mcp";
 import {
   applyTokenResponse,
   buildAuthorizeUrl,
@@ -14,10 +14,7 @@ import {
 } from "./oauth";
 import type { ToolFailure } from "./port";
 
-interface SessionState {
-  id: string;
-  protocol: string;
-}
+type SessionState = McpSession;
 
 interface ClientRegistration {
   clientId: string;
@@ -293,87 +290,51 @@ export class BashiraAuth extends DurableObject<Env> {
     notification: boolean,
   ): Promise<unknown> {
     await this.ensureSession(budget, token);
+    if (!this.session) throw new Error("MCP セッションがありません");
     const body = notification
       ? { jsonrpc: "2.0", method, params }
       : { jsonrpc: "2.0", id: ++this.rpcId, method, params };
-    const response = await this.trackedFetch(budget, this.env.BASHIRA_MCP_URL, {
-      method: "POST",
-      headers: this.mcpHeaders(token),
-      body: JSON.stringify(body),
-    });
-    if (response.status === 401) throw new McpUnauthorized();
-    if (response.status === 404) {
-      await this.clearSession();
-      throw new SessionExpired();
+    try {
+      const posted = await postMcp({
+        url: this.env.BASHIRA_MCP_URL,
+        token,
+        session: this.session,
+        fetchImpl: (url, init) => this.trackedFetch(budget, url, init),
+        body,
+        notification,
+      });
+      return posted.result;
+    } catch (err) {
+      if (err instanceof McpStatusError && err.status === 401) throw new McpUnauthorized();
+      if (err instanceof McpStatusError && err.status === 404) {
+        await this.clearSession();
+        throw new SessionExpired();
+      }
+      throw err;
     }
-    const text = await response.text();
-    if (notification && (response.status === 202 || text.trim() === "")) return null;
-    if (!response.ok) throw new Error(`MCP HTTP ${response.status}: ${text.slice(0, 400)}`);
-    if (!text.trim()) return null;
-    const message = parseMcpHttpBody(response.headers.get("content-type") ?? "", text);
-    if (message.error) throw new Error(message.error.message ?? `MCP ${method} が失敗しました`);
-    return message.result;
   }
 
   private async ensureSession(budget: Budget, token: string): Promise<void> {
     if (this.session) return;
     const stored = await this.ctx.storage.get<SessionState>("mcp_session");
-    if (stored?.id) {
-      this.session = stored;
+    if (stored?.protocol) {
+      this.session = { id: stored.id?.trim() ? stored.id : null, protocol: stored.protocol };
       return;
     }
-    let last: unknown;
-    for (const protocol of ["2025-06-18", "2025-03-26"]) {
-      try {
-        const response = await this.trackedFetch(budget, this.env.BASHIRA_MCP_URL, {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${token}`,
-            accept: "application/json, text/event-stream",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: ++this.rpcId,
-            method: "initialize",
-            params: {
-              protocolVersion: protocol,
-              capabilities: {},
-              clientInfo: { name: "jra-bashira-predict", version: "0.1.0" },
-            },
-          }),
-        });
-        if (response.status === 401) throw new McpUnauthorized();
-        const text = await response.text();
-        if (!response.ok) throw new Error(`MCP initialize HTTP ${response.status}: ${text.slice(0, 300)}`);
-        const message = parseMcpHttpBody(response.headers.get("content-type") ?? "", text);
-        if (message.error) throw new Error(message.error.message ?? "MCP initialize に失敗しました");
-        const sessionId = response.headers.get("mcp-session-id");
-        if (!sessionId) throw new Error("MCP が Mcp-Session-Id を返しませんでした");
-        this.session = { id: sessionId, protocol };
-        await this.ctx.storage.put("mcp_session", this.session);
-        await this.rpc(budget, token, "notifications/initialized", {}, true);
-        return;
-      } catch (err) {
-        if (err instanceof McpUnauthorized || err instanceof BudgetStop) throw err;
-        last = err;
-        await this.clearSession();
-      }
+    try {
+      const opened = await initializeMcpSession({
+        url: this.env.BASHIRA_MCP_URL,
+        token,
+        fetchImpl: (url, init) => this.trackedFetch(budget, url, init),
+        nextId: () => ++this.rpcId,
+        clientInfo: { name: "jra-bashira-predict", version: "0.1.0" },
+      });
+      this.session = opened.session;
+      await this.ctx.storage.put("mcp_session", this.session);
+    } catch (err) {
+      if (err instanceof McpStatusError && err.status === 401) throw new McpUnauthorized();
+      throw err;
     }
-    throw last instanceof Error ? last : new Error("MCP initialize に失敗しました");
-  }
-
-  private mcpHeaders(token: string): Record<string, string> {
-    const headers: Record<string, string> = {
-      authorization: `Bearer ${token}`,
-      accept: "application/json, text/event-stream",
-      "content-type": "application/json",
-    };
-    if (this.session) {
-      headers["mcp-session-id"] = this.session.id;
-      headers["mcp-protocol-version"] = this.session.protocol;
-    }
-    return headers;
   }
 
   private async metadata(budget: Budget): Promise<OAuthMetadata> {
