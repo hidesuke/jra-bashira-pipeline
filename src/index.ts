@@ -59,6 +59,7 @@ function pipelineDeps(env: Env): PipelineDeps {
     kv: env.APP_KV,
     config: appConfig(env),
     bashira: stub,
+    baba: env.BABA,
     enqueue: async (message) => {
       await env.RACE_QUEUE.send(message);
     },
