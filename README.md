@@ -108,25 +108,11 @@ refresh の寿命とローテーションは未公開です。`expires_in` が�
 
 MCP の引数は実行時の `tools/list` で確認します。スキーマに無い引数やフィールドは送りません。`2025-06-18` で initialize し、失敗したら `2025-03-26` を試します。
 
-## プロンプト（v1）
+## プロンプト
 
-本文は `prompts/v1/` にあります。実行時は KV を読みます。このリポジトリからは本番 KV に書きません。
+プロンプトは非公開リポジトリで管理しています。
 
-| ファイル | KV キー | 役割 |
-| --- | --- | --- |
-| `prompts/v1/course_system.md` | `prompt:v2:course` の `system` | Dify「[中央競馬]コースの特徴」の system |
-| `prompts/v1/course_user.md` | `prompt:v2:course` の `user` | 同じノードの user。競馬場・芝ダート障害・距離 |
-| `prompts/v1/race_system.md` | `prompt:v2:race` の `system` | Dify「予測」の system をそのまま |
-| `prompts/v1/race_user.md` | `prompt:v2:race` の `user` | Dify「予測」の user。変数は馬柱・コース特徴・天気・馬場・備考 |
-
-値は `{"version":"v1","system","user"}` です。以前の `{"text"}` は読みません。
-
-```bash
-node scripts/put-prompts.mjs --dry-run
-node scripts/put-prompts.mjs --namespace-id <kv-id> --remote
-```
-
-`--remote` を付けたときだけ本番 KV に入ります。Gemini は system を `systemInstruction`、user を `contents` に分けます。レース予想は Dify と同じ Markdown を返し、見出しから指数分布・自信度・波乱度・印を取ります。
+KV キーは `prompt:v2:course` と `prompt:v2:race` です。値は `{"version","system","user"}` です。以前の `{"text"}` は読みません。Gemini は system を `systemInstruction`、user を `contents` に分けます。レース予想は Markdown を返し、見出しから指数分布・自信度・波乱度・印を取ります。
 
 天気と馬場状態は baba（`/baba/latest` のクッション値・含水率・芝ダートの区分）を土台にし、BASHIRA `get_races` の `weather` と `track_condition` があるときはそれで上書きします。クッション値・含水率・使用コース・芝丈は baba のまま、Dify と同じく備考へ入れます。`POST /run` の任意の `remarks` はその前に付きます。両方空のときは「なし」です。
 

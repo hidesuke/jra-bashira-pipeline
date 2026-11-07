@@ -128,5 +128,37 @@ describe("http", () => {
     expect(await response.text()).toContain("認可が完了");
     const health = await handleRequest(new Request("https://worker.example/health"), http);
     expect(health.status).toBe(200);
+    expect(await health.json()).toEqual({ ok: true, mode: "one-race", commit: null, version_id: null });
+  });
+
+  it("does not return prompt text or raw KV values from job lookups", async () => {
+    const { http, kv } = deps();
+    const secret = "SECRET_PROMPT_BODY";
+    await kv.put(keys.job("20261107-03-11"), secret);
+    const broken = await handleRequest(authed("/admin/jobs?race_key=20261107-03-11"), http);
+    expect(broken.status).toBe(400);
+    const brokenBody = await broken.text();
+    expect(brokenBody).toContain("job:v1:20261107-03-11");
+    expect(brokenBody).not.toContain(secret);
+    await kv.put(
+      keys.job("20261107-03-11"),
+      JSON.stringify({
+        runId: "run-1",
+        race: { raceKey: "20261107-03-11" },
+        requestedBy: "Grok Bot",
+        phase: "error",
+        error: "KV に prompt:v2:course がありません",
+        notionPageId: null,
+        courseVariant: null,
+        odds: null,
+        prediction: { courseText: secret, 予想本文: secret },
+      }),
+    );
+    const job = await handleRequest(authed("/admin/jobs?race_key=20261107-03-11"), http);
+    const body = await job.text();
+    expect(job.status).toBe(200);
+    expect(body).not.toContain(secret);
+    expect(body).not.toContain("courseText");
+    expect(body).toContain("prompt:v2:course");
   });
 });

@@ -1,4 +1,4 @@
-import type { KvStore } from "./types";
+import { JobError, type KvStore } from "./types";
 
 export const keys = {
   job: (raceKey: string) => `job:v1:${raceKey}`,
@@ -14,7 +14,11 @@ export const keys = {
 export async function kvGetJson<T>(kv: KvStore, key: string): Promise<T | null> {
   const raw = await kv.get(key);
   if (raw == null || raw === "") return null;
-  return JSON.parse(raw) as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new JobError(`KV の ${key} を JSON として読めません`, false);
+  }
 }
 
 export async function kvPutJson(

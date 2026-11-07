@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BashiraPort } from "../src/bashira/port";
+import { COURSE_USER_TOKENS, RACE_USER_TOKENS } from "../src/dify-input";
 import { keys, MemoryKv } from "../src/kv";
 import { handleJobMessage, type PipelineDeps } from "../src/pipeline";
 import type { JobMessage, RaceRef } from "../src/types";
@@ -182,7 +183,7 @@ function harness(options?: { odds?: "ok" | "error"; notion?: "create" | "ambiguo
     if (url.includes("generativelanguage.googleapis.com")) {
       geminiBodies.push(body ?? {});
       const userText = ((body?.contents as Array<{ parts?: Array<{ text?: string }> }> | undefined)?.[0]?.parts?.[0]?.text) ?? "";
-      const isRace = userText.includes("馬柱情報") || userText.includes("# 馬柱");
+      const isRace = userText.includes("# 馬柱");
       const text = isRace
         ? [
             "### レース情報",
@@ -264,25 +265,15 @@ function harness(options?: { odds?: "ok" | "error"; notion?: "create" | "ambiguo
   return { deps, kv, pending, statBatches, geminiBodies, notionCalls, deleted };
 }
 
-const RACE_USER = `### 馬柱情報
-{{#1788721223615.output#}}
+const RACE_USER = [
+  RACE_USER_TOKENS.umabashira,
+  RACE_USER_TOKENS.course,
+  RACE_USER_TOKENS.weather,
+  RACE_USER_TOKENS.condition,
+  RACE_USER_TOKENS.remarks,
+].join("\n");
 
-### コースの特徴と予想のポイント
-{{#1788721380442.output#}}
-
-### 天気
-{{#1788103991048.weathre#}}
-
-### 馬場状態
-{{#1788103991048.condition#}}
-
-### 備考
-{{#1787386477043.remarks#}}
-`;
-
-const COURSE_USER = `- 競馬場: {{#1788717846587.course#}}
-- トラック・距離: {{#1788717846587.type#}} {{#1788717846587.distance#}}
-`;
+const COURSE_USER = [COURSE_USER_TOKENS.course, COURSE_USER_TOKENS.type, COURSE_USER_TOKENS.distance].join("\n");
 
 async function seedPrompts(kv: MemoryKv): Promise<void> {
   await kv.put(keys.prompt("course"), JSON.stringify({ version: "v1", system: "コースシステム", user: COURSE_USER }));
@@ -304,8 +295,9 @@ describe("pipeline", () => {
     };
     const courseUser = courseBody.contents?.[0]?.parts?.[0]?.text ?? "";
     expect(courseBody.systemInstruction?.parts?.[0]?.text).toBe("コースシステム");
-    expect(courseUser).toContain("競馬場: 福島");
-    expect(courseUser).toContain("芝 1600");
+    expect(courseUser).toContain("福島");
+    expect(courseUser).toContain("芝");
+    expect(courseUser).toContain("1600");
     expect(courseUser).not.toContain("クッション値");
     expect(courseUser).not.toContain("min_starts");
     const raceBody = env.geminiBodies[1] as {
@@ -316,13 +308,13 @@ describe("pipeline", () => {
     const raceUser = raceBody.contents?.[0]?.parts?.[0]?.text ?? "";
     expect(raceBody.systemInstruction?.parts?.[0]?.text).toBe("予測システム");
     expect(raceBody.generationConfig).toBeUndefined();
-    expect(raceUser).toContain("### 馬柱情報");
+    expect(raceUser).toContain("# 馬柱");
     expect(raceUser).toContain("2026-10-12");
     expect(raceUser).toContain("通過3-3-2-2");
     expect(raceUser).toContain("着差0.2秒");
     expect(raceUser).toContain("コースは先行が残る");
-    expect(raceUser).toContain("### 天気\n曇");
-    expect(raceUser).toContain("### 馬場状態\n重");
+    expect(raceUser).toContain("曇");
+    expect(raceUser).toContain("重");
     expect(raceUser).toContain("クッション値9.2");
     expect(raceUser).toContain("ゴール前10.1");
     expect(raceUser).not.toContain("min_starts");
