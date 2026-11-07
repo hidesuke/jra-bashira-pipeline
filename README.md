@@ -1,6 +1,6 @@
 # JRA BASHIRA 一次予想 Worker
 
-1 レースずつ BASHIRA から出走・成績・オッズを取り、Gemini でコース分析と一次予想を作り、既存の Notion データベース「場立ちのhidesuke JRA予想」に **別ページ** として書く Cloudflare Worker です。このリポジトリはデプロイしません。
+1 レースずつ BASHIRA から出走・成績・オッズを取り、Gemini でコース分析と一次予想を作り、既存の Notion データベース「場立ちのhidesuke JRA予想」に **別ページ** として書く Cloudflare Worker です。リソース（KV、Queue、Durable Object）は最初の `wrangler deploy` が作ります。シークレットの値はこのリポジトリに置きません。
 
 開発モードは手動の 1 レースだけです。cron の時刻は未定なので、定義はコメントアウトしたままです。
 
@@ -13,25 +13,43 @@
 
 Free プランの外部 `fetch` は 1 呼び出し 50 件までです。Worker 側は 45 件で止め、Durable Object 側の MCP 呼び出しは 40 件で止めます。KV・Queue・Durable Object への内部呼び出しは、この 50 件には入れません（Free では外部 50、内部 1000）。
 
-## セットアップ
+## Workers Builds
 
-```bash
-npm install
-npx wrangler login
-npx wrangler kv namespace create APP_KV
-npx wrangler queues create jra-bashira-race
-```
+Git 接続の Cloudflare Workers Builds は、リポジトリ直下をルートにします。Wrangler は `package.json` の `^4.50.0`、lock では 4.158.0 です。KV / Queue の自動作成は [4.45.0 以降](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning) です。
 
-`wrangler.jsonc` の `kv_namespaces[].id` と `preview_id` を、作成した namespace id に差し替えます。今入っている `0000…` はプレースホルダです。
+| 設定 | 値 |
+| --- | --- |
+| ルートディレクトリ | `/`（リポジトリ直下） |
+| ビルドコマンド | `npm ci` |
+| デプロイコマンド | `npx wrangler deploy` |
 
-シークレット（値はコマンドに載せず、対話入力か stdin）:
+`npm ci` は lock と `package.json` が一致している必要があります。依存の範囲は `package.json` のままです（TypeScript 5.9、Vitest 3.2、`@types/node` 24）。
+
+最初の `npx wrangler deploy` が次を作ります。id は設定に書きません。Git からの deploy では、作られた id はダッシュボードに残り、リポジトリには書き戻されません。
+
+- KV `APP_KV`（binding のみ。id なし）
+- Queue `jra-bashira-race`（producer / consumer の名前。id フィールドは無い）
+- Durable Object `BashiraAuth`（`migrations` の `new_sqlite_classes`。SQLite）
+
+ローカルで同じことをするときは `npx wrangler login` のあと `npx wrangler deploy` です。この作業ではデプロイしません。
+
+## シークレット
+
+次の三つは **手動** です。値をリポジトリ、コマンド引数、ログに書かないでください。`openssl rand -base64 32` で作った鍵を `TOKEN_ENCRYPTION_KEY` にします。
+
+- `GEMINI_API_KEY`
+- `NOTION_TOKEN`
+- `TOKEN_ENCRYPTION_KEY`
+
+Worker がまだ無い状態では `wrangler secret put` もダッシュボードもシークレットを先に置けないため、`secrets.required` は設定していません。最初の deploy が Worker を作ったあと、ダッシュボードの Settings → Variables and Secrets か、次で入れます。
 
 ```bash
 npx wrangler secret put GEMINI_API_KEY
 npx wrangler secret put NOTION_TOKEN
-# openssl rand -base64 32 の結果
 npx wrangler secret put TOKEN_ENCRYPTION_KEY
 ```
+
+`secret put` はそれ自体がデプロイになります。レースを動かす前に三つとも入れてください。入っていないと実行時に失敗します。
 
 ローカルの `wrangler dev` では同じ名前を `.dev.vars` に書きます。`.dev.vars.example` をコピーしてください。`.dev.vars` はコミットしません。
 
@@ -96,11 +114,11 @@ MCP の引数は実行時の `tools/list` で確認します。スキーマに�
 | `prompt:v2:race` | `{"version":"4","text":"..."}` |
 
 ```bash
-node scripts/put-prompts.mjs --stage course --version 3 --file /path/to/course.md --remote
-node scripts/put-prompts.mjs --stage race --version 4 --file /path/to/race.md --remote
+node scripts/put-prompts.mjs --stage course --version 3 --file /path/to/course.md --namespace-id <kv-id> --remote
+node scripts/put-prompts.mjs --stage race --version 4 --file /path/to/race.md --namespace-id <kv-id> --remote
 ```
 
-namespace id を設定に書いていない間は `--namespace-id <id>` を付けます。Worker はプロンプトの後ろに `# 入力データ` と JSON を足します。レース段階は次のキーを持つ JSON を要求します。`指数分布`、`自信度`、`波乱度`、`印`、`予想本文`。
+KV の id は設定に無いので、ダッシュボードの namespace id を `--namespace-id` で渡します。Worker はプロンプトの後ろに `# 入力データ` と JSON を足します。レース段階は次のキーを持つ JSON を要求します。`指数分布`、`自信度`、`波乱度`、`印`、`予想本文`。
 
 ## モデル
 
