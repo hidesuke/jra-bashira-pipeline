@@ -1,12 +1,18 @@
+import { readFileSync } from "node:fs";
 import { generateKeyPair, SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
 import { identifyCaller, verifyAccessJwt } from "../src/access";
 import { ExternalBudget, budgetedFetch } from "../src/budget";
 import { cronSkipReason } from "../src/cron";
 import { decryptJson, encryptJson, importAesKey, safeEqual } from "../src/crypto-util";
+import { courseUserMessage, fillRaceUser } from "../src/dify-input";
+import { extractRaceMarkdown } from "../src/extract-prediction";
+import { PAST_RUN_LIMIT, selectPastRuns } from "../src/form";
 import { parseRacePrediction } from "../src/gemini";
 import { formatJst } from "../src/jst";
-import { MemoryKv } from "../src/kv";
+import { keys, MemoryKv } from "../src/kv";
+import { loadPrompt } from "../src/prompts";
+import { formatPastRun, renderUmabashira } from "../src/umabashira";
 import { applyModelUpdate, assertModelsAllowed, generateContentModels, restoreModelUpdate } from "../src/models";
 import { ambiguousNameMessage, parseMcpHttpBody, unwrapToolResult } from "../src/bashira/mcp";
 import { applyTokenResponse, buildAuthorizeUrl, createPkce, discoverOAuth } from "../src/bashira/oauth";
@@ -433,6 +439,119 @@ describe("dify markdown blocks", () => {
     const many = markdownToNotionBlocks(Array.from({ length: 101 }, (_, index) => `行${index}`).join("\n"));
     const chunks = chunkChildren(many);
     expect(chunks.map((chunk) => chunk.length)).toEqual([100, 1]);
+  });
+});
+
+describe("dify v1 inputs", () => {
+  const race = { raceKey: "20261107-03-11", raceId: "20261107-03-11", date: "2026-11-07", venue: "福島", venueCode: "03", raceNumber: 11 };
+
+  it("keeps the Dify race prompt text and leaves stats out of the course prompt", () => {
+    const system = readFileSync("prompts/v1/race_system.md", "utf8");
+    const user = readFileSync("prompts/v1/race_user.md", "utf8");
+    const course = readFileSync("prompts/v1/course.md", "utf8");
+    expect(system.startsWith("# あなたの役割と目的")).toBe(true);
+    expect(user).toContain("{{#1788721223615.output#}}");
+    expect(user).toContain("{{#1788103991048.weathre#}}");
+    expect(user).not.toContain("get_stats");
+    expect(course).not.toContain("get_stats");
+    expect(course).not.toContain("母数");
+    expect(course).not.toContain("統計メモ");
+  });
+
+  it("fills only the Dify user slots", () => {
+    const filled = fillRaceUser(readFileSync("prompts/v1/race_user.md", "utf8"), {
+      umabashira: "馬柱本文",
+      course: "コース本文",
+      weather: "晴",
+      condition: "良",
+      remarks: "なし",
+    });
+    expect(filled).toContain("馬柱本文");
+    expect(filled).toContain("コース本文");
+    expect(filled).not.toContain("{{#");
+    expect(filled).not.toContain("min_starts");
+    const course = courseUserMessage({
+      race,
+      raceRow: { surface: "芝", distance: 1600, weather: "晴", track_condition: "良" },
+      baba: null,
+    });
+    expect(course).toContain("距離: 1600");
+    expect(course).not.toContain("min_starts");
+  });
+
+  it("keeps at most ten past runs and skips the current race", () => {
+    const rows = [
+      { horse_name: "ア", race_meeting_date: "2026-11-07", race_track: "福島", race_number: 11, entry_status: "upcoming" },
+      ...Array.from({ length: 12 }, (_, index) => ({
+        horse_name: "ア",
+        race_meeting_date: `2026-01-${String(index + 1).padStart(2, "0")}`,
+        race_track: "東京",
+        race_number: 1,
+        entry_status: "finished",
+        official_result: index + 1,
+      })),
+    ];
+    const selected = selectPastRuns(rows, race, "ア");
+    expect(selected).toHaveLength(PAST_RUN_LIMIT);
+    expect(selected.some((row) => row.race_meeting_date === "2026-11-07")).toBe(false);
+    expect(selected[0]?.race_meeting_date).toBe("2026-01-12");
+  });
+
+  it("renders a past run with the fields BASHIRA provides", () => {
+    const line = formatPastRun({
+      race_meeting_date: "2026-10-12",
+      race_track: "東京",
+      surface: "芝",
+      distance: 1600,
+      rail_type: "A",
+      track_condition: "良",
+      race_condition: "3勝クラス",
+      race_name_main: "前走",
+      official_result: 2,
+      finish_time_sec: 93.2,
+      time_difference_with_winner_sec: 0.2,
+      first_corner_position: 3,
+      second_corner_position: 3,
+      third_corner_position: 2,
+      fourth_corner_position: 2,
+      last_3f_sec: 33.8,
+      last_3f_rank: 1,
+      jockey_name: "騎手A",
+      weight_to_carry_kg: 56,
+      scheduled_horse_count: 16,
+      win_odds_rank: 4,
+      win_odds: 6.5,
+    });
+    expect(line).toContain("2026-10-12");
+    expect(line).toContain("東京芝1600m（A）");
+    expect(line).toContain("2着");
+    expect(line).toContain("頭数16");
+    expect(line).toContain("時計1:33.2");
+    expect(line).toContain("着差0.2秒");
+    expect(line).toContain("通過3-3-2-2");
+    expect(line).toContain("上り33.8(1位)");
+    expect(line).toContain("騎手 騎手A");
+    expect(line).toContain("斤量 56");
+    expect(line).toContain("人気 4");
+    const page = renderUmabashira({
+      race,
+      entries: [{ horse_number: 1, horse_name: "ア", race_abnormality: "出走取消" }],
+      formTasks: [],
+    });
+    expect(page).toContain("馬身");
+    expect(page).toContain("出走取消");
+    expect(page).not.toContain("min_starts");
+  });
+
+  it("reads the Dify markdown headings and rejects the old prompt shape", async () => {
+    const fields = extractRaceMarkdown(
+      ["### レース総合判定", "- **指数分布ステータス:** 【1強・独走型】", "- **予想自信度:** 【A】", "- **波乱度:** 【堅実】", "", "### 競馬新聞風印予想", "- ◎ 1 ア"].join("\n"),
+    );
+    expect(fields).toMatchObject({ 指数分布: "1強・独走型", 自信度: "A", 波乱度: "堅実" });
+    expect(fields.印).toContain("◎ 1 ア");
+    const kv = new MemoryKv();
+    await kv.put(keys.prompt("race"), JSON.stringify({ version: "1.0.0", text: "古い本文" }));
+    await expect(loadPrompt(kv, "race")).rejects.toThrow(/system/);
   });
 });
 

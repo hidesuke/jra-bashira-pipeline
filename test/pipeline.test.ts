@@ -59,7 +59,7 @@ function harness(options?: { odds?: "ok" | "error"; notion?: "create" | "ambiguo
       }
       return { ok: true, tools: bashiraTools };
     },
-    async callTool(name) {
+    async callTool(name, args) {
       if (name === "get_races") {
         return {
           ok: true,
@@ -80,6 +80,49 @@ function harness(options?: { odds?: "ok" | "error"; notion?: "create" | "ambiguo
         };
       }
       if (name === "get_entries") {
+        const filters = (args as { filters?: { horse_name?: string } }).filters;
+        if (filters?.horse_name) {
+          return {
+            ok: true,
+            data: {
+              rows: [
+                {
+                  horse_name: filters.horse_name,
+                  race_meeting_date: "2026-11-07",
+                  race_track: "福島",
+                  race_number: 11,
+                  entry_status: "upcoming",
+                },
+                {
+                  horse_name: filters.horse_name,
+                  race_meeting_date: "2026-10-12",
+                  race_track: "東京",
+                  surface: "芝",
+                  distance: 1600,
+                  rail_type: "A",
+                  track_condition: "良",
+                  race_condition: "3勝クラス",
+                  race_name_main: "テスト前走",
+                  official_result: 2,
+                  finish_time_sec: 93.2,
+                  time_difference_with_winner_sec: 0.2,
+                  first_corner_position: 3,
+                  second_corner_position: 3,
+                  third_corner_position: 2,
+                  fourth_corner_position: 2,
+                  last_3f_sec: 33.8,
+                  last_3f_rank: 1,
+                  jockey_name: "騎手A",
+                  weight_to_carry_kg: 56,
+                  scheduled_horse_count: 16,
+                  win_odds_rank: 4,
+                  win_odds: 6.5,
+                  entry_status: "finished",
+                },
+              ],
+            },
+          };
+        }
         return {
           ok: true,
           data: {
@@ -127,11 +170,25 @@ function harness(options?: { odds?: "ok" | "error"; notion?: "create" | "ambiguo
     }
     if (url.includes("generativelanguage.googleapis.com")) {
       geminiBodies.push(body ?? {});
-      const json = Boolean((body?.generationConfig as { responseMimeType?: string } | undefined)?.responseMimeType);
-      const text = json
-        ? JSON.stringify({ 指数分布: "1強", 自信度: "A", 波乱度: "堅実", 印: "◎1", 予想本文: "先行有利" })
+      const userText = ((body?.contents as Array<{ parts?: Array<{ text?: string }> }> | undefined)?.[0]?.parts?.[0]?.text) ?? "";
+      const isRace = userText.includes("馬柱情報") || userText.includes("# 馬柱");
+      const text = isRace
+        ? [
+            "### レース情報",
+            "- **レース名:** テストS",
+            "",
+            "### レース総合判定",
+            "- **指数分布ステータス:** 【1強・独走型】",
+            "- **予想自信度:** 【A】 （差がある）",
+            "- **波乱度:** 【堅実】 （順当）",
+            "",
+            "### 競馬新聞風印予想",
+            "- ◎ 1 ア",
+            "",
+            "先行有利",
+          ].join("\n")
         : "コースは先行が残る";
-      const modelVersion = json ? "gemini-race-001" : "gemini-course-001";
+      const modelVersion = isRace ? "gemini-race-001" : "gemini-course-001";
       return Response.json({ modelVersion, candidates: [{ content: { parts: [{ text }] } }] });
     }
     if (url.includes("api.notion.com")) {
@@ -196,20 +253,60 @@ function harness(options?: { odds?: "ok" | "error"; notion?: "create" | "ambiguo
   return { deps, kv, pending, statBatches, geminiBodies, notionCalls, deleted };
 }
 
+const RACE_USER = `### 馬柱情報
+{{#1788721223615.output#}}
+
+### コースの特徴と予想のポイント
+{{#1788721380442.output#}}
+
+### 天気
+{{#1788103991048.weathre#}}
+
+### 馬場状態
+{{#1788103991048.condition#}}
+
+### 備考
+{{#1787386477043.remarks#}}
+`;
+
+async function seedPrompts(kv: MemoryKv): Promise<void> {
+  await kv.put(keys.prompt("course"), JSON.stringify({ version: "v1", system: "コースの特徴を書く", user: "" }));
+  await kv.put(keys.prompt("race"), JSON.stringify({ version: "v1", system: "予測システム", user: RACE_USER }));
+}
+
 describe("pipeline", () => {
   it("predicts one race, splits stats, and updates the same Notion page on rerun", async () => {
     const env = harness();
-    await env.kv.put(keys.prompt("course"), JSON.stringify({ version: "3", text: "コース分析プロンプト" }));
-    await env.kv.put(keys.prompt("race"), JSON.stringify({ version: "4", text: "レース予想プロンプト" }));
+    await seedPrompts(env.kv);
     const start: JobMessage = { kind: "start", runId: "run-1", race, requestedBy: "Grok Bot" };
     const results = await drain(env, start);
     expect(results.every((result) => result === "ack")).toBe(true);
     expect(env.statBatches).toEqual([8, 1]);
     expect(env.geminiBodies).toHaveLength(2);
-    const coursePrompt = (
-      env.geminiBodies[0]?.contents as Array<{ parts: Array<{ text: string }> }>
-    )[0]?.parts[0]?.text;
-    expect(coursePrompt).toContain('"course_variant": null');
+    const courseBody = env.geminiBodies[0] as {
+      systemInstruction?: { parts?: Array<{ text?: string }> };
+      contents?: Array<{ parts?: Array<{ text?: string }> }>;
+    };
+    const courseUser = courseBody.contents?.[0]?.parts?.[0]?.text ?? "";
+    expect(courseBody.systemInstruction?.parts?.[0]?.text).toBe("コースの特徴を書く");
+    expect(courseUser).toContain("開催場: 福島");
+    expect(courseUser).toContain("距離: 1600");
+    expect(courseUser).not.toContain("min_starts");
+    const raceBody = env.geminiBodies[1] as {
+      systemInstruction?: { parts?: Array<{ text?: string }> };
+      generationConfig?: unknown;
+      contents?: Array<{ parts?: Array<{ text?: string }> }>;
+    };
+    const raceUser = raceBody.contents?.[0]?.parts?.[0]?.text ?? "";
+    expect(raceBody.systemInstruction?.parts?.[0]?.text).toBe("予測システム");
+    expect(raceBody.generationConfig).toBeUndefined();
+    expect(raceUser).toContain("### 馬柱情報");
+    expect(raceUser).toContain("2026-10-12");
+    expect(raceUser).toContain("通過3-3-2-2");
+    expect(raceUser).toContain("着差0.2秒");
+    expect(raceUser).toContain("コースは先行が残る");
+    expect(raceUser).not.toContain("min_starts");
+    expect(raceUser).not.toContain("{{#");
     const created = env.notionCalls.find((call) => call.method === "POST" && call.path === "/v1/pages");
     const createdBody = created?.body as {
       properties?: { 名前?: { title?: Array<{ text?: { content?: string } }> } };
@@ -217,7 +314,8 @@ describe("pipeline", () => {
     };
     expect(createdBody.properties?.名前?.title?.[0]?.text?.content).toBe("テストS（G2）");
     const children = createdBody.children;
-    expect(children?.[0]?.paragraph?.rich_text?.[0]?.text?.content).toBe("先行有利");
+    expect(children?.[0]?.type).toBe("heading_3");
+    expect(JSON.stringify(children?.[0])).toContain("レース情報");
     expect(children?.some((block) => block.type === "heading_3")).toBe(true);
     expect(children?.some((block) => block.type === "bulleted_list_item")).toBe(true);
     const footer = children?.at(-1);
@@ -228,7 +326,8 @@ describe("pipeline", () => {
     expect(bodyText).toContain("指定モデル（course）: gemini-flash-latest");
     expect(bodyText).toContain("応答モデル modelVersion（course）: gemini-course-001");
     expect(bodyText).toContain("応答モデル modelVersion（race）: gemini-race-001");
-    expect(bodyText).toContain("プロンプト版（course）: 3");
+    expect(bodyText).toContain("プロンプト版（course）: v1");
+    expect(bodyText).toContain("先行有利");
     expect(bodyText).toContain("オッズ種別: 最終");
     expect(bodyText).toContain("2026-11-07T15:04:00+09:00");
     expect(bodyText).toContain("course_variant: null");
@@ -260,8 +359,7 @@ describe("pipeline", () => {
 
   it("stops instead of guessing when two BASHIRA pages match", async () => {
     const env = harness({ notion: "ambiguous" });
-    await env.kv.put(keys.prompt("course"), JSON.stringify({ version: "3", text: "コース" }));
-    await env.kv.put(keys.prompt("race"), JSON.stringify({ version: "4", text: "レース" }));
+    await seedPrompts(env.kv);
     const results = await drain(env, { kind: "start", runId: "run-amb", race, requestedBy: "Muse" });
     expect(results.at(-1)).toBe("ack");
     expect(env.notionCalls.some((call) => call.method === "POST" && call.path === "/v1/pages")).toBe(false);
@@ -272,8 +370,7 @@ describe("pipeline", () => {
 
   it("continues when odds cannot be fetched", async () => {
     const env = harness({ odds: "error" });
-    await env.kv.put(keys.prompt("course"), JSON.stringify({ version: "1", text: "コース" }));
-    await env.kv.put(keys.prompt("race"), JSON.stringify({ version: "1", text: "レース" }));
+    await seedPrompts(env.kv);
     await drain(env, { kind: "start", runId: "run-odds", race, requestedBy: "Grok Bot" });
     const created = env.notionCalls.find((call) => call.method === "POST" && call.path === "/v1/pages");
     expect(JSON.stringify(created?.body)).toContain("取得エラー");

@@ -8,7 +8,7 @@
 
 1. `POST /run` がレースを 1 件だけ Queue `jra-bashira-race` に積む。
 2. Consumer が 1 メッセージずつ処理する。`get_stats` は 8 件ずつ別メッセージに分ける。
-3. コース分析のあとレース予想を行い、Notion に書く。
+3. 各馬の近10走を馬柱にし、コース特徴のあとレース予想を行い、Notion に書く。集計（get_stats）は v1 のプロンプトには入れない。
 4. 同じレースの再実行は、KV に覚えたページを更新する。BASHIRA のページが複数あって判断できないときはエラーで止まる。
 
 Free プランの外部 `fetch` は 1 呼び出し 50 件までです。Worker 側は 45 件で止め、Durable Object 側の MCP 呼び出しは 40 件で止めます。KV・Queue・Durable Object への内部呼び出しは、この 50 件には入れません（Free では外部 50、内部 1000）。
@@ -108,21 +108,28 @@ refresh の寿命とローテーションは未公開です。`expires_in` が�
 
 MCP の引数は実行時の `tools/list` で確認します。スキーマに無い引数やフィールドは送りません。`2025-06-18` で initialize し、失敗したら `2025-03-26` を試します。
 
-## プロンプトを KV に入れる
+## プロンプト（v1）
 
-プロンプト本文はこのリポジトリに置きません。版番号付きで KV に入れます。
+本文は `prompts/v1/` にあります。実行時は KV を読みます。このリポジトリからは本番 KV に書きません。
 
-| キー | 値 |
-| --- | --- |
-| `prompt:v2:course` | `{"version":"3","text":"..."}` |
-| `prompt:v2:race` | `{"version":"4","text":"..."}` |
+| ファイル | KV キー | 役割 |
+| --- | --- | --- |
+| `prompts/v1/course.md` | `prompt:v2:course` の `system` | コースの特徴。集計表は渡さない |
+| `prompts/v1/race_system.md` | `prompt:v2:race` の `system` | Dify「予測」の system をそのまま |
+| `prompts/v1/race_user.md` | `prompt:v2:race` の `user` | Dify「予測」の user。変数は馬柱・コース特徴・天気・馬場・備考 |
+
+値は `{"version":"v1","system","user"}` です。以前の `{"text"}` は読みません。
 
 ```bash
-node scripts/put-prompts.mjs --stage course --version 3 --file /path/to/course.md --namespace-id <kv-id> --remote
-node scripts/put-prompts.mjs --stage race --version 4 --file /path/to/race.md --namespace-id <kv-id> --remote
+node scripts/put-prompts.mjs --dry-run
+node scripts/put-prompts.mjs --namespace-id <kv-id> --remote
 ```
 
-KV の id は設定に無いので、ダッシュボードの namespace id を `--namespace-id` で渡します。Worker はプロンプトの後ろに `# 入力データ` と JSON を足します。レース段階は次のキーを持つ JSON を要求します。`指数分布`、`自信度`、`波乱度`、`印`、`予想本文`。
+`--remote` を付けたときだけ本番 KV に入ります。Gemini は system を `systemInstruction`、user を `contents` に分けます。レース予想は Dify と同じ Markdown を返し、見出しから指数分布・自信度・波乱度・印を取ります。
+
+`POST /run` の任意の `remarks` が備考です。無いときは「なし」です。
+
+近走は `get_entries` を馬名ごと、`race_meeting_date` 降順、最大 12 行取り、今回のレースと `upcoming` を除いて 10 走まで馬柱にします。get_stats の枠・騎手・父の集計は v1 のプロンプトには入れません。
 
 ## モデル
 

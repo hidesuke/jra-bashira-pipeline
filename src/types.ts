@@ -47,7 +47,8 @@ export interface KvStore {
 }
 
 export type JobMessage =
-  | { kind: "start"; runId: string; race: RaceRef; requestedBy: string }
+  | { kind: "start"; runId: string; race: RaceRef; requestedBy: string; remarks?: string }
+  | { kind: "form"; runId: string; raceKey: string }
   | { kind: "stats"; runId: string; raceKey: string }
   | { kind: "predict"; runId: string; raceKey: string }
   | { kind: "notion"; runId: string; raceKey: string };

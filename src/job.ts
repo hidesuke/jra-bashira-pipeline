@@ -1,3 +1,4 @@
+import type { FormTask } from "./form";
 import type { OddsSummary } from "./odds";
 import type { StatTask } from "./stats";
 import { kvGetJson, kvPutJson, keys } from "./kv";
@@ -22,11 +23,15 @@ export interface JobState {
   runId: string;
   race: RaceRef;
   requestedBy: string;
-  phase: "collect" | "stats" | "predict" | "notion" | "done" | "error";
+  phase: "collect" | "form" | "stats" | "predict" | "notion" | "done" | "error";
   error?: string;
+  /** Dify の備考。無ければ空。 */
+  remarks: string;
   baba: unknown;
   raceRow: Record<string, unknown> | null;
   entries: Record<string, unknown>[];
+  /** 馬ごとの近10走。 */
+  formTasks: FormTask[];
   odds: OddsSummary | null;
   /** 内・外のデータは無い。常に null。 */
   courseVariant: null;
