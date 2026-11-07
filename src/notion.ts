@@ -51,15 +51,35 @@ export interface NotionDecisionInput {
   stored: { id: string; found: boolean; matchesRace: boolean } | null;
   pages: Array<{ id: string; isBashira: boolean }>;
   truncated: boolean;
+  /** この実行で作成済みのページ。旧ページが残っていてもこれを使い、重複では止めない。 */
+  resumePageId?: string | null;
 }
 
 export type NotionDecision =
   | { action: "create" }
   | { action: "update"; pageId: string }
+  | { action: "resume"; pageId: string }
   | { action: "error"; message: string };
 
-/** Dify のページ（本文のどこにも BASHIRAで取得 が無いもの）は候補にしない。複数の BASHIRA ページはエラー。 */
+/**
+ * Dify のページ（本文のどこにも BASHIRAで取得 が無いもの）は候補にしない。
+ * 引き継ぐページ ID が無いときに BASHIRA ページが複数ならエラー。
+ * resumePageId は作成直後に保存したページなので、旧ページが残っていてもそれを使う。
+ */
 export function decideNotionTarget(input: NotionDecisionInput): NotionDecision {
+  if (input.resumePageId) {
+    const storedIsResume = input.stored?.id === input.resumePageId;
+    if (storedIsResume && input.stored?.found && !input.stored.matchesRace) {
+      return {
+        action: "error",
+        message: "KV の Notion ページは日付・競馬場・レースが一致しません。別ページを推測しないので止めます",
+      };
+    }
+    // 保存したページが 404 のときだけ、通常の判断に戻す。
+    if (!(storedIsResume && input.stored && !input.stored.found)) {
+      return { action: "resume", pageId: input.resumePageId };
+    }
+  }
   if (input.truncated) {
     return { action: "error", message: "同じレースの Notion 検索が打ち切られました。どれが BASHIRA のページか判断できないので止めます" };
   }

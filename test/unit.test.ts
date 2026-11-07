@@ -291,12 +291,60 @@ describe("notion matching", () => {
     expect(decideNotionTarget({ stored: null, pages: [{ id: "a", isBashira: true }, { id: "b", isBashira: true }], truncated: false }).action).toBe("error");
     expect(
       decideNotionTarget({
+        stored: { id: "new", found: true, matchesRace: true },
+        pages: [
+          { id: "new", isBashira: true },
+          { id: "old", isBashira: true },
+        ],
+        truncated: false,
+      }).action,
+    ).toBe("error");
+    expect(
+      decideNotionTarget({
         stored: { id: "ours", found: true, matchesRace: false },
         pages: [],
         truncated: false,
       }).action,
     ).toBe("error");
     expect(decideNotionTarget({ stored: null, pages: [], truncated: true }).action).toBe("error");
+    expect(
+      decideNotionTarget({
+        stored: { id: "new", found: true, matchesRace: true },
+        pages: [
+          { id: "new", isBashira: true },
+          { id: "old", isBashira: true },
+        ],
+        truncated: true,
+        resumePageId: "new",
+      }),
+    ).toEqual({ action: "resume", pageId: "new" });
+    expect(
+      decideNotionTarget({
+        stored: { id: "old", found: true, matchesRace: true },
+        pages: [
+          { id: "old", isBashira: true },
+          { id: "new", isBashira: true },
+        ],
+        truncated: false,
+        resumePageId: "new",
+      }),
+    ).toEqual({ action: "resume", pageId: "new" });
+    expect(
+      decideNotionTarget({
+        stored: { id: "new", found: true, matchesRace: false },
+        pages: [],
+        truncated: false,
+        resumePageId: "new",
+      }).action,
+    ).toBe("error");
+    expect(
+      decideNotionTarget({
+        stored: { id: "new", found: false, matchesRace: false },
+        pages: [{ id: "old", isBashira: true }],
+        truncated: false,
+        resumePageId: "new",
+      }),
+    ).toEqual({ action: "update", pageId: "old" });
     expect(blocksIncludeBashira([{ type: "paragraph", paragraph: { rich_text: [{ plain_text: "BASHIRAで取得" }] } }])).toBe(true);
     expect(blocksIncludeBashira([{ type: "paragraph", paragraph: { rich_text: [{ plain_text: "Dify" }] } }])).toBe(false);
     expect(

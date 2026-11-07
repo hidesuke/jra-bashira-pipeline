@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { BashiraPort } from "../src/bashira/port";
+import { pageBlocks } from "../src/body";
 import { COURSE_USER_DIFY_TOKENS, COURSE_USER_PLACEHOLDERS, RACE_USER_DIFY_TOKENS, RACE_USER_PLACEHOLDERS } from "../src/dify-input";
+import type { JobState } from "../src/job";
 import { keys, MemoryKv } from "../src/kv";
-import { handleJobMessage, type PipelineDeps } from "../src/pipeline";
-import type { JobMessage, RaceRef } from "../src/types";
+import { handleJobMessage, NOTION_CONTINUATION_LIMIT, type PipelineDeps } from "../src/pipeline";
+import { QUEUE_MAX_RETRIES, type JobMessage, type RaceRef } from "../src/types";
 import { bashiraTools, notionSchema } from "./fixture";
 
 const race: RaceRef = {
@@ -39,14 +41,22 @@ async function drain(
   return results;
 }
 
-function harness(options?: { odds?: "ok" | "error"; notion?: "create" | "ambiguous"; auth?: boolean }) {
+function harness(options?: {
+  odds?: "ok" | "error";
+  notion?: "create" | "ambiguous";
+  auth?: boolean;
+  existingPageId?: string;
+  failArchiveOnce?: boolean;
+  externalBudget?: number;
+}) {
   const kv = new MemoryKv();
   const pending: JobMessage[] = [];
   const statBatches: number[] = [];
   const geminiBodies: Array<Record<string, unknown>> = [];
   const notionCalls: Array<{ method: string; path: string; body?: unknown }> = [];
-  const deleted = new Set<string>();
-  let created = false;
+  const createdIds: string[] = [];
+  const archivedIds = new Set<string>();
+  let archiveAttempts = 0;
 
   const bashira: BashiraPort = {
     async listTools() {
@@ -212,41 +222,53 @@ function harness(options?: { odds?: "ok" | "error"; notion?: "create" | "ambiguo
           return Response.json({ has_more: false, results: [{ id: "page-a" }, { id: "page-b" }] });
         }
         const results = [{ id: "dify-page" }];
-        if (created) results.push({ id: "page-1" });
+        if (options?.existingPageId && !archivedIds.has(options.existingPageId)) results.push({ id: options.existingPageId });
+        for (const id of createdIds) {
+          if (!archivedIds.has(id)) results.push({ id });
+        }
         return Response.json({ has_more: false, results });
       }
       if (path === "/v1/pages" && method === "POST") {
-        created = true;
-        return Response.json({ id: "page-1" });
+        const id = `page-${createdIds.length + 1}`;
+        createdIds.push(id);
+        return Response.json({ id });
       }
-      if (path === "/v1/pages/page-1" && method === "GET") {
+      const pageId = path.match(/^\/v1\/pages\/([^/]+)$/)?.[1];
+      if (pageId && method === "GET") {
         return Response.json({
-          id: "page-1",
+          id: pageId,
+          archived: archivedIds.has(pageId),
           properties: {
-            日付: { date: { start: "2026-11-07" } },
-            競馬場: { select: { name: "福島" } },
-            レース: { select: { name: "11" } },
+            日付: { date: { start: race.date } },
+            競馬場: { select: { name: race.venue } },
+            レース: { select: { name: String(race.raceNumber) } },
           },
         });
+      }
+      if (pageId && method === "PATCH") {
+        if (body && typeof body === "object" && (body as { archived?: boolean }).archived === true) {
+          archiveAttempts += 1;
+          if (options?.failArchiveOnce && archiveAttempts === 1) {
+            return Response.json({ message: "unavailable" }, { status: 500 });
+          }
+          archivedIds.add(pageId);
+          return Response.json({ id: pageId, archived: true });
+        }
+        return Response.json({ id: pageId });
       }
       if (path.startsWith("/v1/blocks/") && path.endsWith("/children") && method === "GET") {
         const id = path.split("/")[3];
         if (id === "dify-page") {
           return Response.json({ results: [{ id: "dify-b", type: "paragraph", paragraph: { rich_text: [{ plain_text: "Difyの予想" }] } }] });
         }
-        if (options?.notion === "ambiguous") {
-          return Response.json({ results: [{ id: `${id}-b`, type: "paragraph", paragraph: { rich_text: [{ plain_text: "BASHIRAで取得" }] } }] });
-        }
-        if (deleted.has("page-1-block")) return Response.json({ results: [] });
         return Response.json({
-          results: [{ id: "page-1-block", type: "paragraph", paragraph: { rich_text: [{ plain_text: "BASHIRAで取得" }] } }],
+          results: [{ id: `${id}-b`, type: "paragraph", paragraph: { rich_text: [{ plain_text: "BASHIRAで取得" }] } }],
         });
       }
-      if (method === "DELETE") {
-        deleted.add("page-1-block");
+      if (path.startsWith("/v1/blocks/") && path.endsWith("/children") && method === "PATCH") {
         return Response.json({});
       }
-      if (method === "PATCH") return Response.json({ id: "page-1" });
+      if (method === "DELETE") return Response.json({});
       return Response.json({ message: `unexpected ${method} ${path}` }, { status: 500 });
     }
     return Response.json({ message: `unexpected ${url}` }, { status: 500 });
@@ -258,11 +280,14 @@ function harness(options?: { odds?: "ok" | "error"; notion?: "create" | "ambiguo
     bashira,
     now: () => new Date("2026-11-07T06:00:00Z"),
     fetch: fetchImpl,
+    clock: () => Date.parse("2026-11-07T06:00:00Z"),
+    sleep: async () => {},
+    externalBudget: options?.externalBudget,
     enqueue: async (message) => {
       pending.push(message);
     },
   };
-  return { deps, kv, pending, statBatches, geminiBodies, notionCalls, deleted };
+  return { deps, kv, pending, statBatches, geminiBodies, notionCalls, archivedIds, createdIds };
 }
 
 type PromptStyle = "placeholder" | "dify";
@@ -283,7 +308,7 @@ async function seedPrompts(kv: MemoryKv, style: PromptStyle = "placeholder"): Pr
 }
 
 describe("pipeline", () => {
-  it("predicts one race, splits stats, and updates the same Notion page on rerun", async () => {
+  it("predicts one race, splits stats, and replaces the Notion page on rerun", async () => {
     const env = harness();
     await seedPrompts(env.kv);
     const start: JobMessage = { kind: "start", runId: "run-1", race, requestedBy: "Grok Bot" };
@@ -347,15 +372,28 @@ describe("pipeline", () => {
     expect(bodyText).toContain("2026-11-07T15:04:00+09:00");
     expect(bodyText).toContain("course_variant: null");
     await expect(env.kv.get(keys.notionPage(race.raceKey))).resolves.toBe("page-1");
+    expect(env.notionCalls.some((call) => call.method === "DELETE")).toBe(false);
 
     const again = await drain(env, { kind: "start", runId: "run-2", race, requestedBy: "Muse" });
     expect(again.every((result) => result === "ack")).toBe(true);
-    expect(env.notionCalls.filter((call) => call.method === "POST" && call.path === "/v1/pages")).toHaveLength(1);
-    const patches = env.notionCalls.filter((call) => call.method === "PATCH").map((call) => call.path);
-    expect(patches).toContain("/v1/pages/page-1");
-    expect(env.deleted.has("page-1-block")).toBe(true);
+    const creates = env.notionCalls.filter((call) => call.method === "POST" && call.path === "/v1/pages");
+    expect(creates).toHaveLength(2);
+    const second = creates[1]?.body as {
+      properties?: { 名前?: { title?: Array<{ text?: { content?: string } }> } };
+      children?: Array<{ type?: string; paragraph?: { color?: string } }>;
+    };
+    expect(second.properties?.名前?.title?.[0]?.text?.content).toBe("テストS（G2）");
+    expect(second.children?.[0]?.type).toBe("heading_3");
+    expect(second.children?.at(-1)?.paragraph?.color).toBe("gray");
+    const archiveIndex = env.notionCalls.findIndex((call) => call.method === "PATCH" && call.path === "/v1/pages/page-1");
+    const secondCreateIndex = env.notionCalls.lastIndexOf(creates[1]!);
+    expect(archiveIndex).toBeGreaterThan(secondCreateIndex);
+    expect(env.notionCalls[archiveIndex]?.body).toEqual({ archived: true });
+    expect(env.archivedIds.has("page-1")).toBe(true);
+    expect(env.archivedIds.has("page-2")).toBe(false);
+    expect(env.notionCalls.some((call) => call.method === "DELETE")).toBe(false);
     expect(env.notionCalls.some((call) => call.path.includes("dify"))).toBe(true);
-    expect(env.notionCalls.filter((call) => call.method === "DELETE").every((call) => call.path.includes("page-1-block"))).toBe(true);
+    await expect(env.kv.get(keys.notionPage(race.raceKey))).resolves.toBe("page-2");
   });
 
   it("fills legacy Dify user tokens through the predict step", async () => {
@@ -410,4 +448,159 @@ describe("pipeline", () => {
     const created = env.notionCalls.find((call) => call.method === "POST" && call.path === "/v1/pages");
     expect(JSON.stringify(created?.body)).toContain("取得エラー");
   });
+
+  it("retries an archive failure without dropping the old page or creating another", async () => {
+    const env = harness({ existingPageId: "page-0", failArchiveOnce: true });
+    await env.kv.put(keys.notionPage(race.raceKey), "page-0");
+    await env.kv.put(keys.job(race.raceKey), JSON.stringify(notionReady()));
+    const message: JobMessage = { kind: "notion", runId: "run-notion", raceKey: race.raceKey };
+    const first = await handleJobMessage(message, env.deps, { attempt: 1, maxRetries: QUEUE_MAX_RETRIES });
+    expect(first).toBe("retry");
+    const midway = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(midway.phase).toBe("notion");
+    expect(midway.error).toBeUndefined();
+    expect(midway.notionPageId).toBe("page-1");
+    expect(midway.notionArchivePageId).toBe("page-0");
+    expect(env.archivedIds.has("page-0")).toBe(false);
+    expect(env.createdIds).toEqual(["page-1"]);
+    await expect(env.kv.get(keys.notionPage(race.raceKey))).resolves.toBe("page-1");
+
+    const second = await handleJobMessage(message, env.deps, { attempt: 2, maxRetries: QUEUE_MAX_RETRIES });
+    expect(second).toBe("ack");
+    const done = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(done.phase).toBe("done");
+    expect(done.notionPageId).toBe("page-1");
+    expect(env.createdIds).toEqual(["page-1"]);
+    expect(env.archivedIds.has("page-0")).toBe(true);
+    expect(env.notionCalls.some((call) => call.method === "DELETE")).toBe(false);
+    const archive = env.notionCalls.filter((call) => call.method === "PATCH" && call.path === "/v1/pages/page-0");
+    expect(archive.at(-1)?.body).toEqual({ archived: true });
+  });
+
+  it("continues a budget split on a new message instead of stopping at phase=error", async () => {
+    const lines = Array.from({ length: 130 }, (_, index) => `- 行${index}`).join("\n");
+    const ready = notionReady();
+    ready.prediction = { ...ready.prediction!, 予想本文: lines };
+    const expected = pageBlocks({
+      race,
+      raceName: "テストS",
+      requestedBy: ready.requestedBy,
+      odds: ready.odds!,
+      courseModel: ready.prediction.courseModel,
+      raceModel: ready.prediction.raceModel,
+      courseModelVersion: ready.prediction.courseModelVersion,
+      raceModelVersion: ready.prediction.raceModelVersion,
+      coursePromptVersion: ready.prediction.coursePromptVersion,
+      racePromptVersion: ready.prediction.racePromptVersion,
+      印: ready.prediction.印,
+      予想本文: ready.prediction.予想本文,
+      courseText: ready.prediction.courseText,
+    });
+    expect(expected.length).toBeGreaterThan(100);
+    const env = harness({ existingPageId: "page-0", externalBudget: 6 });
+    await env.kv.put(keys.notionPage(race.raceKey), "page-0");
+    await env.kv.put(keys.job(race.raceKey), JSON.stringify(ready));
+    const first = await handleJobMessage(
+      { kind: "notion", runId: "run-notion", raceKey: race.raceKey },
+      env.deps,
+      { attempt: QUEUE_MAX_RETRIES, maxRetries: QUEUE_MAX_RETRIES },
+    );
+    expect(first).toBe("ack");
+    const midway = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(midway.phase).toBe("notion");
+    expect(midway.error).toBeUndefined();
+    expect(midway.notionPageId).toBe("page-1");
+    expect(midway.notionBlocksWritten).toBe(100);
+    expect(midway.notionContinuations).toBe(1);
+    expect(env.archivedIds.has("page-0")).toBe(false);
+    expect(env.pending.map((message) => message.kind)).toEqual(["notion"]);
+    const created = env.notionCalls.find((call) => call.method === "POST" && call.path === "/v1/pages");
+    const createdChildren = (created?.body as { children?: unknown[] } | undefined)?.children ?? [];
+    expect(createdChildren).toHaveLength(100);
+    expect(JSON.stringify(createdChildren[99])).toBe(JSON.stringify(expected[99]));
+
+    const second = await handleJobMessage(env.pending[0]!, env.deps, { attempt: 1, maxRetries: QUEUE_MAX_RETRIES });
+    expect(second).toBe("ack");
+    const done = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(done.phase).toBe("done");
+    expect(done.notionPageId).toBe("page-1");
+    expect(env.createdIds).toEqual(["page-1"]);
+    expect(env.archivedIds.has("page-0")).toBe(true);
+    const appended = env.notionCalls
+      .filter((call) => call.method === "PATCH" && call.path === "/v1/blocks/page-1/children")
+      .flatMap((call) => ((call.body as { children?: unknown[] } | undefined)?.children ?? []));
+    expect(appended).toHaveLength(expected.length - 100);
+    expect(JSON.stringify(appended[0])).toBe(JSON.stringify(expected[100]));
+    expect(JSON.stringify(appended.at(-1))).toBe(JSON.stringify(expected.at(-1)));
+    expect((appended.at(-1) as { paragraph?: { color?: string } }).paragraph?.color).toBe("gray");
+    const archiveAt = env.notionCalls.findIndex((call) => call.method === "PATCH" && call.path === "/v1/pages/page-0" && (call.body as { archived?: boolean }).archived);
+    const appendAt = env.notionCalls.findIndex((call) => call.method === "PATCH" && call.path === "/v1/blocks/page-1/children");
+    expect(archiveAt).toBeGreaterThan(appendAt);
+    expect(env.notionCalls.some((call) => call.method === "DELETE")).toBe(false);
+    await expect(env.kv.get(keys.notionPage(race.raceKey))).resolves.toBe("page-1");
+  });
+
+  it("stops a budget split that never finishes instead of enqueueing forever", async () => {
+    const env = harness({ externalBudget: 0 });
+    const ready = notionReady({
+      notionPageId: "page-1",
+      notionArchivePageId: "page-0",
+      notionBlocksWritten: 1,
+      notionContinuations: NOTION_CONTINUATION_LIMIT,
+    });
+    await env.kv.put(keys.job(race.raceKey), JSON.stringify(ready));
+    const decision = await handleJobMessage(
+      { kind: "notion", runId: "run-notion", raceKey: race.raceKey },
+      env.deps,
+      { attempt: QUEUE_MAX_RETRIES, maxRetries: QUEUE_MAX_RETRIES },
+    );
+    expect(decision).toBe("ack");
+    expect(env.pending).toHaveLength(0);
+    const job = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(job.phase).toBe("error");
+    expect(job.error).toContain("サブリクエスト");
+    expect(env.notionCalls).toHaveLength(0);
+  });
 });
+
+function notionReady(extra: Partial<JobState> = {}): JobState {
+  return {
+    runId: "run-notion",
+    race,
+    requestedBy: "Grok Bot",
+    phase: "notion",
+    remarks: "",
+    baba: null,
+    raceRow: { race_name_main: "テストS", grade: "G2" },
+    entries: [],
+    formTasks: [],
+    odds: {
+      source: "none",
+      available: false,
+      kind: null,
+      observedAtJst: null,
+      reason: "未発売",
+      detail: null,
+      horses: [],
+    },
+    courseVariant: null,
+    statTasks: [],
+    prediction: {
+      courseText: "コースは先行が残る",
+      courseModel: "gemini-flash-latest",
+      raceModel: "gemini-flash-latest",
+      courseModelVersion: "gemini-course-001",
+      raceModelVersion: "gemini-race-001",
+      coursePromptVersion: "v1",
+      racePromptVersion: "v1",
+      指数分布: "【1強・独走型】",
+      自信度: "【A】",
+      波乱度: "【堅実】",
+      印: "◎ 1 ア",
+      予想本文: "### レース情報\n- 先行有利",
+    },
+    notionPageId: null,
+    updatedAt: "2026-11-07T06:00:00.000Z",
+    ...extra,
+  };
+}

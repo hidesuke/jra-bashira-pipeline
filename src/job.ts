@@ -41,6 +41,12 @@ export interface JobState {
   statTasks: StatTask[];
   prediction: StoredPrediction | null;
   notionPageId: string | null;
+  /** 本文を書き終えたあとアーカイブする旧ページ。新規だけなら null。 */
+  notionArchivePageId?: string | null;
+  /** 新しいページに書き終えた子ブロック数。再開時は残りだけ足す。 */
+  notionBlocksWritten?: number;
+  /** サブリクエスト分割で Notion 段を積み直した回数。 */
+  notionContinuations?: number;
   updatedAt: string;
 }
 
