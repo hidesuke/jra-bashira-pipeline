@@ -5,10 +5,16 @@
   "compatibility_date": "2026-11-07",
   "compatibility_flags": ["nodejs_compat"],
   // 1レースの手動実行が前提なので、ログもトレースも全件残す。
+  // issues はダッシュボードの問題検出（Workers Issues）。
   "observability": {
     "enabled": true,
-    "logs": { "enabled": true, "head_sampling_rate": 1 },
-    "traces": { "enabled": true, "head_sampling_rate": 1 }
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+      "head_sampling_rate": 1
+    },
+    "traces": { "enabled": true, "head_sampling_rate": 1 },
+    "issues": { "enabled": true }
   },
   // cron は時刻が決まるまで無効。有効化しても src/index.ts の scheduled は
   // レースを積まずに戻る（開発モードは POST /run の 1 レースだけ）。
