@@ -114,9 +114,27 @@ MCP の引数は実行時の `tools/list` で確認します。スキーマに�
 
 KV キーは `prompt:v2:course` と `prompt:v2:race` です。値は `{"version","system","user"}` です。以前の `{"text"}` は読みません。Gemini は system を `systemInstruction`、user を `contents` に分けます。レース予想は Markdown を返し、見出しから指数分布・自信度・波乱度・印を取ります。
 
-天気と馬場状態は baba（`/baba/latest` のクッション値・含水率・芝ダートの区分）を土台にし、BASHIRA `get_races` の `weather` と `track_condition` があるときはそれで上書きします。クッション値・含水率・使用コース・芝丈は baba のまま、Dify と同じく備考へ入れます。`POST /run` の任意の `remarks` はその前に付きます。両方空のときは「なし」です。
+user 文の差し込みは次の名前です。置換したあとに `{{` が残っていると（`{{name}}` も `{{#…#}}` も）ジョブは失敗します。KV を新しい名前へ替えるまでのあいだ、右の Dify ノード ID にも同じ値を入れます。
 
-近走は `get_entries` を馬名ごと、`race_meeting_date` 降順、最大 12 行取り、今回のレースと `upcoming` を除いて 10 走まで馬柱にします。get_stats の枠・騎手・父の集計は v1 のプロンプトには入れません。
+### コース特徴（`prompt:v2:course`）
+
+| 差し込み | 入るもの | 出典 | 移行中の Dify トークン |
+| --- | --- | --- | --- |
+| `{{venue}}` | 競馬場 | リクエストの開催場（BASHIRA `get_races` の `race_track`） | `{{#1788717846587.course#}}` |
+| `{{surface}}` | 芝 / ダート / 障害。無いときは「不明」 | BASHIRA `get_races` の `surface` | `{{#1788717846587.type#}}` |
+| `{{distance}}` | 距離（メートルの数値）。無いときは「不明」 | BASHIRA `get_races` の `distance` | `{{#1788717846587.distance#}}` |
+
+### レース予想（`prompt:v2:race`）
+
+| 差し込み | 入るもの | 出典 | 移行中の Dify トークン |
+| --- | --- | --- | --- |
+| `{{umabashira}}` | 馬柱。近走は最大 10 走 | BASHIRA `get_entries`。馬名ごとに `race_meeting_date` 降順で最大 12 行取り、今回のレースと `upcoming` を除いた残り | `{{#1788721223615.output#}}` |
+| `{{course_analysis}}` | コース分析の本文 | 第 1 段階（course）の出力 | `{{#1788721380442.output#}}` |
+| `{{weather}}` | 天気。どちらも無いときは「不明」 | baba API（`/baba/latest`）を土台にし、BASHIRA `get_races` の `weather` で上書き | `{{#1788103991048.weathre#}}` |
+| `{{condition}}` | 馬場状態。どちらも無いときは「不明」 | baba API の芝/ダート区分を土台にし、BASHIRA `get_races` の `track_condition` で上書き | `{{#1788103991048.condition#}}` |
+| `{{remarks}}` | 備考。両方空のときは「なし」 | `POST /run` の任意の `remarks` と、baba にしか無い詳細（クッション値・含水率・使用コース・芝丈）。日付・場コード・レース番号のサマリを付ける | `{{#1787386477043.remarks#}}` |
+
+get_stats の枠・騎手・父の集計は v1 のプロンプトには入れません。
 
 ## モデル
 

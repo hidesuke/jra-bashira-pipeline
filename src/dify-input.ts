@@ -1,10 +1,22 @@
 import { JobError, type RaceRef } from "./types";
 import { numberField, stringField } from "./rows";
 
-/** Dify「予測」ユーザー文の変数。ノード ID は DSL のまま。 */
-export const RACE_USER_TOKENS = {
+/** レース予想ユーザー文の差し込み。KV はこちらの名前を使う。 */
+export const RACE_USER_PLACEHOLDERS = {
+  umabashira: "{{umabashira}}",
+  course_analysis: "{{course_analysis}}",
+  weather: "{{weather}}",
+  condition: "{{condition}}",
+  remarks: "{{remarks}}",
+} as const;
+
+/**
+ * 移行期間の Dify ノード ID。KV を上の名前へ替えるまで、同じ値で置換する。
+ * 天気は DSL の綴り weathre のまま。
+ */
+export const RACE_USER_DIFY_TOKENS = {
   umabashira: "{{#1788721223615.output#}}",
-  course: "{{#1788721380442.output#}}",
+  course_analysis: "{{#1788721380442.output#}}",
   weather: "{{#1788103991048.weathre#}}",
   condition: "{{#1788103991048.condition#}}",
   remarks: "{{#1787386477043.remarks#}}",
@@ -12,33 +24,61 @@ export const RACE_USER_TOKENS = {
 
 export function fillRaceUser(
   template: string,
-  values: { umabashira: string; course: string; weather: string; condition: string; remarks: string },
+  values: { umabashira: string; course_analysis: string; weather: string; condition: string; remarks: string },
 ): string {
-  let text = template;
-  for (const [key, token] of Object.entries(RACE_USER_TOKENS)) {
-    text = text.split(token).join(values[key as keyof typeof values]);
-  }
-  if (text.includes("{{#")) {
-    throw new JobError("レース予想のユーザー文に未置換の Dify 変数が残っています", false);
-  }
-  return text;
+  return fillPlaceholders(
+    template,
+    RACE_USER_PLACEHOLDERS,
+    RACE_USER_DIFY_TOKENS,
+    values,
+    "レース予想のユーザー文に未置換の差し込み（{{）が残っています",
+  );
 }
 
-/** Dify「[中央競馬]コースの特徴」ユーザー文。入力は競馬場・芝ダート障害・距離だけ。 */
-export const COURSE_USER_TOKENS = {
-  course: "{{#1788717846587.course#}}",
-  type: "{{#1788717846587.type#}}",
+/** コース特徴ユーザー文。競馬場・芝/ダート/障害・距離だけ。 */
+export const COURSE_USER_PLACEHOLDERS = {
+  venue: "{{venue}}",
+  surface: "{{surface}}",
+  distance: "{{distance}}",
+} as const;
+
+/** 移行期間の Dify ノード ID。course は競馬場、type は馬場種類。 */
+export const COURSE_USER_DIFY_TOKENS = {
+  venue: "{{#1788717846587.course#}}",
+  surface: "{{#1788717846587.type#}}",
   distance: "{{#1788717846587.distance#}}",
 } as const;
 
-export function fillCourseUser(template: string, values: { course: string; type: string; distance: string }): string {
-  let text = template;
-  for (const [key, token] of Object.entries(COURSE_USER_TOKENS)) {
-    text = text.split(token).join(values[key as keyof typeof values]);
+export function fillCourseUser(template: string, values: { venue: string; surface: string; distance: string }): string {
+  return fillPlaceholders(
+    template,
+    COURSE_USER_PLACEHOLDERS,
+    COURSE_USER_DIFY_TOKENS,
+    values,
+    "コース特徴のユーザー文に未置換の差し込み（{{）が残っています",
+  );
+}
+
+function fillPlaceholders(
+  template: string,
+  placeholders: Readonly<Record<string, string>>,
+  legacy: Readonly<Record<string, string>>,
+  values: Readonly<Record<string, string>>,
+  message: string,
+): string {
+  const pairs: Array<{ token: string; value: string }> = [];
+  for (const key of Object.keys(placeholders)) {
+    const value = values[key];
+    if (typeof value !== "string") throw new JobError(message, false);
+    pairs.push({ token: placeholders[key]!, value });
+    const old = legacy[key];
+    if (old !== undefined) pairs.push({ token: old, value });
   }
-  if (text.includes("{{#")) {
-    throw new JobError("コース特徴のユーザー文に未置換の Dify 変数が残っています", false);
-  }
+  const ordered = pairs.sort((a, b) => b.token.length - a.token.length);
+  const pattern = new RegExp(ordered.map((item) => item.token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
+  const byToken = new Map(ordered.map((item) => [item.token, item.value]));
+  const text = template.replace(pattern, (token) => byToken.get(token) ?? token);
+  if (text.includes("{{")) throw new JobError(message, false);
   return text;
 }
 

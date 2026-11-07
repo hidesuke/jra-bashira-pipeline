@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BashiraPort } from "../src/bashira/port";
-import { COURSE_USER_TOKENS, RACE_USER_TOKENS } from "../src/dify-input";
+import { COURSE_USER_DIFY_TOKENS, COURSE_USER_PLACEHOLDERS, RACE_USER_DIFY_TOKENS, RACE_USER_PLACEHOLDERS } from "../src/dify-input";
 import { keys, MemoryKv } from "../src/kv";
 import { handleJobMessage, type PipelineDeps } from "../src/pipeline";
 import type { JobMessage, RaceRef } from "../src/types";
@@ -265,19 +265,21 @@ function harness(options?: { odds?: "ok" | "error"; notion?: "create" | "ambiguo
   return { deps, kv, pending, statBatches, geminiBodies, notionCalls, deleted };
 }
 
-const RACE_USER = [
-  RACE_USER_TOKENS.umabashira,
-  RACE_USER_TOKENS.course,
-  RACE_USER_TOKENS.weather,
-  RACE_USER_TOKENS.condition,
-  RACE_USER_TOKENS.remarks,
-].join("\n");
+type PromptStyle = "placeholder" | "dify";
 
-const COURSE_USER = [COURSE_USER_TOKENS.course, COURSE_USER_TOKENS.type, COURSE_USER_TOKENS.distance].join("\n");
+function courseUser(style: PromptStyle): string {
+  const tokens = style === "placeholder" ? COURSE_USER_PLACEHOLDERS : COURSE_USER_DIFY_TOKENS;
+  return [tokens.venue, tokens.surface, tokens.distance].join("\n");
+}
 
-async function seedPrompts(kv: MemoryKv): Promise<void> {
-  await kv.put(keys.prompt("course"), JSON.stringify({ version: "v1", system: "コースシステム", user: COURSE_USER }));
-  await kv.put(keys.prompt("race"), JSON.stringify({ version: "v1", system: "予測システム", user: RACE_USER }));
+function raceUser(style: PromptStyle): string {
+  const tokens = style === "placeholder" ? RACE_USER_PLACEHOLDERS : RACE_USER_DIFY_TOKENS;
+  return [tokens.umabashira, tokens.course_analysis, tokens.weather, tokens.condition, tokens.remarks].join("\n");
+}
+
+async function seedPrompts(kv: MemoryKv, style: PromptStyle = "placeholder"): Promise<void> {
+  await kv.put(keys.prompt("course"), JSON.stringify({ version: "v1", system: "コースシステム", user: courseUser(style) }));
+  await kv.put(keys.prompt("race"), JSON.stringify({ version: "v1", system: "予測システム", user: raceUser(style) }));
 }
 
 describe("pipeline", () => {
@@ -298,6 +300,7 @@ describe("pipeline", () => {
     expect(courseUser).toContain("福島");
     expect(courseUser).toContain("芝");
     expect(courseUser).toContain("1600");
+    expect(courseUser).not.toContain("{{");
     expect(courseUser).not.toContain("クッション値");
     expect(courseUser).not.toContain("min_starts");
     const raceBody = env.geminiBodies[1] as {
@@ -318,7 +321,7 @@ describe("pipeline", () => {
     expect(raceUser).toContain("クッション値9.2");
     expect(raceUser).toContain("ゴール前10.1");
     expect(raceUser).not.toContain("min_starts");
-    expect(raceUser).not.toContain("{{#");
+    expect(raceUser).not.toContain("{{");
     const created = env.notionCalls.find((call) => call.method === "POST" && call.path === "/v1/pages");
     const createdBody = created?.body as {
       properties?: { 名前?: { title?: Array<{ text?: { content?: string } }> } };
@@ -353,6 +356,26 @@ describe("pipeline", () => {
     expect(env.deleted.has("page-1-block")).toBe(true);
     expect(env.notionCalls.some((call) => call.path.includes("dify"))).toBe(true);
     expect(env.notionCalls.filter((call) => call.method === "DELETE").every((call) => call.path.includes("page-1-block"))).toBe(true);
+  });
+
+  it("fills legacy Dify user tokens through the predict step", async () => {
+    const env = harness();
+    await seedPrompts(env.kv, "dify");
+    const results = await drain(env, { kind: "start", runId: "run-dify-tokens", race, requestedBy: "Grok Bot" });
+    expect(results.every((result) => result === "ack")).toBe(true);
+    const texts = env.geminiBodies.map((body) => {
+      const contents = body.contents as Array<{ parts?: Array<{ text?: string }> }> | undefined;
+      return contents?.[0]?.parts?.[0]?.text ?? "";
+    });
+    expect(texts[0]).toContain("福島");
+    expect(texts[0]).toContain("芝");
+    expect(texts[0]).toContain("1600");
+    expect(texts[0]).not.toContain("{{");
+    expect(texts[1]).toContain("# 馬柱");
+    expect(texts[1]).toContain("曇");
+    expect(texts[1]).toContain("重");
+    expect(texts[1]).toContain("クッション値9.2");
+    expect(texts[1]).not.toContain("{{");
   });
 
   it("stops when BASHIRA refresh fails and does not call Gemini", async () => {
