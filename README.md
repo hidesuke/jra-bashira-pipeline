@@ -114,7 +114,8 @@ MCP の引数は実行時の `tools/list` で確認します。スキーマに�
 
 | ファイル | KV キー | 役割 |
 | --- | --- | --- |
-| `prompts/v1/course.md` | `prompt:v2:course` の `system` | コースの特徴。集計表は渡さない |
+| `prompts/v1/course_system.md` | `prompt:v2:course` の `system` | Dify「[中央競馬]コースの特徴」の system |
+| `prompts/v1/course_user.md` | `prompt:v2:course` の `user` | 同じノードの user。競馬場・芝ダート障害・距離 |
 | `prompts/v1/race_system.md` | `prompt:v2:race` の `system` | Dify「予測」の system をそのまま |
 | `prompts/v1/race_user.md` | `prompt:v2:race` の `user` | Dify「予測」の user。変数は馬柱・コース特徴・天気・馬場・備考 |
 
@@ -127,7 +128,7 @@ node scripts/put-prompts.mjs --namespace-id <kv-id> --remote
 
 `--remote` を付けたときだけ本番 KV に入ります。Gemini は system を `systemInstruction`、user を `contents` に分けます。レース予想は Dify と同じ Markdown を返し、見出しから指数分布・自信度・波乱度・印を取ります。
 
-`POST /run` の任意の `remarks` が備考です。無いときは「なし」です。
+天気と馬場状態は baba（`/baba/latest` のクッション値・含水率・芝ダートの区分）を土台にし、BASHIRA `get_races` の `weather` と `track_condition` があるときはそれで上書きします。クッション値・含水率・使用コース・芝丈は baba のまま、Dify と同じく備考へ入れます。`POST /run` の任意の `remarks` はその前に付きます。両方空のときは「なし」です。
 
 近走は `get_entries` を馬名ごと、`race_meeting_date` 降順、最大 12 行取り、今回のレースと `upcoming` を除いて 10 走まで馬柱にします。get_stats の枠・騎手・父の集計は v1 のプロンプトには入れません。
 

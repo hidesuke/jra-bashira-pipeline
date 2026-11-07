@@ -5,7 +5,7 @@ import { identifyCaller, verifyAccessJwt } from "../src/access";
 import { ExternalBudget, budgetedFetch } from "../src/budget";
 import { cronSkipReason } from "../src/cron";
 import { decryptJson, encryptJson, importAesKey, safeEqual } from "../src/crypto-util";
-import { courseUserMessage, fillRaceUser } from "../src/dify-input";
+import { composeRemarks, fillCourseUser, fillRaceUser, mergeGoing } from "../src/dify-input";
 import { extractRaceMarkdown } from "../src/extract-prediction";
 import { PAST_RUN_LIMIT, selectPastRuns } from "../src/form";
 import { parseRacePrediction } from "../src/gemini";
@@ -448,14 +448,17 @@ describe("dify v1 inputs", () => {
   it("keeps the Dify race prompt text and leaves stats out of the course prompt", () => {
     const system = readFileSync("prompts/v1/race_system.md", "utf8");
     const user = readFileSync("prompts/v1/race_user.md", "utf8");
-    const course = readFileSync("prompts/v1/course.md", "utf8");
+    const courseSystem = readFileSync("prompts/v1/course_system.md", "utf8");
+    const courseUser = readFileSync("prompts/v1/course_user.md", "utf8");
     expect(system.startsWith("# あなたの役割と目的")).toBe(true);
     expect(user).toContain("{{#1788721223615.output#}}");
     expect(user).toContain("{{#1788103991048.weathre#}}");
     expect(user).not.toContain("get_stats");
-    expect(course).not.toContain("get_stats");
-    expect(course).not.toContain("母数");
-    expect(course).not.toContain("統計メモ");
+    expect(courseSystem.startsWith("# 役割と目的")).toBe(true);
+    expect(courseSystem).not.toContain("地方競馬");
+    expect(courseUser).toContain("{{#1788717846587.course#}}");
+    expect(courseUser).toContain("{{#1788717846587.type#}} {{#1788717846587.distance#}}");
+    expect(courseUser).not.toContain("get_stats");
   });
 
   it("fills only the Dify user slots", () => {
@@ -470,13 +473,49 @@ describe("dify v1 inputs", () => {
     expect(filled).toContain("コース本文");
     expect(filled).not.toContain("{{#");
     expect(filled).not.toContain("min_starts");
-    const course = courseUserMessage({
-      race,
-      raceRow: { surface: "芝", distance: 1600, weather: "晴", track_condition: "良" },
-      baba: null,
+    const course = fillCourseUser(readFileSync("prompts/v1/course_user.md", "utf8"), {
+      course: "福島",
+      type: "芝",
+      distance: "1600",
     });
-    expect(course).toContain("距離: 1600");
+    expect(course).toContain("競馬場: 福島");
+    expect(course).toContain("芝 1600");
+    expect(course).not.toContain("{{#");
     expect(course).not.toContain("min_starts");
+  });
+
+  it("lets BASHIRA weather and going override baba, and keeps cushion and moisture", () => {
+    const merged = mergeGoing({
+      surface: "芝",
+      raceRow: { weather: "曇", track_condition: "重" },
+      baba: {
+        venue: {
+          weather: "晴",
+          cushion: 9.2,
+          measuredAt: "11月7日 7時00分",
+          rainfallMm: 0,
+          turf: { condition: "良", goal: 10.1, corner4: 11.2, goalCondition: "良", corner4Condition: "良" },
+          dirt: { condition: "稍重", goal: 8, corner4: 8.4 },
+          usedCourse: "Bコース",
+        },
+      },
+    });
+    expect(merged.weather).toBe("曇");
+    expect(merged.condition).toBe("重");
+    expect(merged.babaDetail).toContain("クッション値9.2");
+    expect(merged.babaDetail).toContain("ゴール前10.1");
+    expect(merged.babaDetail).toContain("使用コース:Bコース");
+    const withoutBashira = mergeGoing({
+      surface: "ダート",
+      raceRow: {},
+      baba: { venue: { dirt: { condition: "稍重", goal: 5, corner4: 6 } } },
+    });
+    expect(withoutBashira.condition).toBe("稍重");
+    expect(withoutBashira.weather).toBe("不明");
+    const remarks = composeRemarks("メモ", merged.babaDetail, race);
+    expect(remarks.startsWith("メモ\n")).toBe(true);
+    expect(remarks).toContain("2026-11-07 場:03 11R ｜");
+    expect(remarks).toContain("クッション値9.2");
   });
 
   it("keeps at most ten past runs and skips the current race", () => {

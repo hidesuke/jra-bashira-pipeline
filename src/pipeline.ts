@@ -2,7 +2,7 @@ import { fetchBaba, babaFailure } from "./baba";
 import { pageBlocks, pageTitle } from "./body";
 import { chunkChildren } from "./notion-blocks";
 import { ExternalBudget } from "./budget";
-import { conditionOf, courseUserMessage, fillRaceUser, weatherOf } from "./dify-input";
+import { composeRemarks, fillCourseUser, fillRaceUser, mergeGoing } from "./dify-input";
 import { readRacePrediction } from "./extract-prediction";
 import { buildFormTasks, FORM_BATCH_SIZE, selectPastRuns } from "./form";
 import { generateText } from "./gemini";
@@ -347,15 +347,20 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
     const models = await loadModels(deps.kv, deps.config.defaultModel);
     const coursePrompt = await loadPrompt(deps.kv, "course");
     const racePrompt = await loadPrompt(deps.kv, "race");
-    const weather = weatherOf(state.raceRow, state.baba);
-    const condition = conditionOf(state.raceRow, state.baba, state.raceRow ? stringField(state.raceRow, "surface") : null);
+    const surface = state.raceRow ? stringField(state.raceRow, "surface") : null;
+    const distance = state.raceRow ? numberField(state.raceRow, "distance") : null;
+    const going = mergeGoing({ raceRow: state.raceRow, baba: state.baba, surface });
     const course = await generateText({
       apiKey: deps.config.geminiApiKey,
       model: models.config.course,
       budget,
       fetcher: deps.fetch,
       system: coursePrompt.system,
-      prompt: courseUserMessage({ race: state.race, raceRow: state.raceRow, baba: state.baba }),
+      prompt: fillCourseUser(coursePrompt.user, {
+        course: state.race.venue,
+        type: surface ?? "不明",
+        distance: distance == null ? "不明" : String(distance),
+      }),
     });
     const race = await generateText({
       apiKey: deps.config.geminiApiKey,
@@ -366,9 +371,9 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       prompt: fillRaceUser(racePrompt.user, {
         umabashira: renderUmabashira({ race: state.race, entries: state.entries, formTasks: state.formTasks ?? [] }),
         course: course.text,
-        weather,
-        condition,
-        remarks: state.remarks?.trim() || "なし",
+        weather: going.weather,
+        condition: going.condition,
+        remarks: composeRemarks(state.remarks ?? "", going.babaDetail, state.race),
       }),
     });
     const fields = readRacePrediction(race.text);

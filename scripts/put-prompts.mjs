@@ -27,21 +27,22 @@ const dryRun = args.includes("--dry-run");
 
 if (!remote && !preview && !local && !dryRun) {
   console.error("使い方: node scripts/put-prompts.mjs (--dry-run | --local | --preview | --remote) [--namespace-id <id>]");
-  console.error("prompts/v1/course.md と race_system.md と race_user.md を version v1 で入れます。本番へ書くのは --remote のときだけです。");
+  console.error("prompts/v1 の course_system.md / course_user.md / race_system.md / race_user.md を version v1 で入れます。本番へ書くのは --remote のときだけです。");
   process.exit(1);
 }
 
 const root = join(import.meta.dirname, "..");
-const course = readFileSync(join(root, "prompts/v1/course.md"), "utf8");
+const courseSystem = readFileSync(join(root, "prompts/v1/course_system.md"), "utf8");
+const courseUser = readFileSync(join(root, "prompts/v1/course_user.md"), "utf8");
 const raceSystem = readFileSync(join(root, "prompts/v1/race_system.md"), "utf8");
 const raceUser = readFileSync(join(root, "prompts/v1/race_user.md"), "utf8");
-if (!course.trim() || !raceSystem.trim() || !raceUser.trim()) {
+if (!courseSystem.trim() || !courseUser.trim() || !raceSystem.trim() || !raceUser.trim()) {
   console.error("prompts/v1 のファイルが空です");
   process.exit(1);
 }
 
 const payloads = {
-  "prompt:v2:course": { version: "v1", system: course, user: "" },
+  "prompt:v2:course": { version: "v1", system: courseSystem, user: courseUser },
   "prompt:v2:race": { version: "v1", system: raceSystem, user: raceUser },
 };
 

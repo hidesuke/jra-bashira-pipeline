@@ -74,6 +74,8 @@ function harness(options?: { odds?: "ok" | "error"; notion?: "create" | "ambiguo
                 race_track: "福島",
                 race_number: 11,
                 rail_type: "A",
+                weather: "曇",
+                track_condition: "重",
               },
             ],
           },
@@ -165,7 +167,16 @@ function harness(options?: { odds?: "ok" | "error"; notion?: "create" | "ambiguo
     if (url.startsWith(config.babaUrl)) {
       return Response.json({
         fetchedAt: "2026-11-07T06:00:00Z",
-        venues: [{ venueName: "福島", turf: { condition: "良" } }],
+        venues: [
+          {
+            venueName: "福島",
+            weather: "晴",
+            cushion: 9.2,
+            measuredAt: "11月7日 7時00分",
+            turf: { condition: "良", goal: 10.1, corner4: 11.2, goalCondition: "良", corner4Condition: "良" },
+            dirt: { condition: "稍重", goal: 8, corner4: 8.4 },
+          },
+        ],
       });
     }
     if (url.includes("generativelanguage.googleapis.com")) {
@@ -269,8 +280,12 @@ const RACE_USER = `### 馬柱情報
 {{#1787386477043.remarks#}}
 `;
 
+const COURSE_USER = `- 競馬場: {{#1788717846587.course#}}
+- トラック・距離: {{#1788717846587.type#}} {{#1788717846587.distance#}}
+`;
+
 async function seedPrompts(kv: MemoryKv): Promise<void> {
-  await kv.put(keys.prompt("course"), JSON.stringify({ version: "v1", system: "コースの特徴を書く", user: "" }));
+  await kv.put(keys.prompt("course"), JSON.stringify({ version: "v1", system: "コースシステム", user: COURSE_USER }));
   await kv.put(keys.prompt("race"), JSON.stringify({ version: "v1", system: "予測システム", user: RACE_USER }));
 }
 
@@ -288,9 +303,10 @@ describe("pipeline", () => {
       contents?: Array<{ parts?: Array<{ text?: string }> }>;
     };
     const courseUser = courseBody.contents?.[0]?.parts?.[0]?.text ?? "";
-    expect(courseBody.systemInstruction?.parts?.[0]?.text).toBe("コースの特徴を書く");
-    expect(courseUser).toContain("開催場: 福島");
-    expect(courseUser).toContain("距離: 1600");
+    expect(courseBody.systemInstruction?.parts?.[0]?.text).toBe("コースシステム");
+    expect(courseUser).toContain("競馬場: 福島");
+    expect(courseUser).toContain("芝 1600");
+    expect(courseUser).not.toContain("クッション値");
     expect(courseUser).not.toContain("min_starts");
     const raceBody = env.geminiBodies[1] as {
       systemInstruction?: { parts?: Array<{ text?: string }> };
@@ -305,6 +321,10 @@ describe("pipeline", () => {
     expect(raceUser).toContain("通過3-3-2-2");
     expect(raceUser).toContain("着差0.2秒");
     expect(raceUser).toContain("コースは先行が残る");
+    expect(raceUser).toContain("### 天気\n曇");
+    expect(raceUser).toContain("### 馬場状態\n重");
+    expect(raceUser).toContain("クッション値9.2");
+    expect(raceUser).toContain("ゴール前10.1");
     expect(raceUser).not.toContain("min_starts");
     expect(raceUser).not.toContain("{{#");
     const created = env.notionCalls.find((call) => call.method === "POST" && call.path === "/v1/pages");

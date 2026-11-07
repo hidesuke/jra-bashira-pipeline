@@ -4,7 +4,7 @@ import { JobError, type KvStore } from "./types";
 export interface StoredPrompt {
   version: string;
   system: string;
-  /** レースは Dify のユーザー文。コースは空で、本文はコードが組み立てる。 */
+  /** Dify の user メッセージ。コースもレースも本文をそのまま入れる。 */
   user: string;
 }
 
@@ -23,7 +23,7 @@ export async function loadPrompt(kv: KvStore, stage: "course" | "race"): Promise
     throw new JobError(`${keys.prompt(stage)} の version が空です`, false);
   }
   const user = typeof stored.user === "string" ? stored.user : "";
-  if (stage === "race" && user.trim() === "") {
+  if (user.trim() === "") {
     throw new JobError(`${keys.prompt(stage)} の user が空です`, false);
   }
   return { version: stored.version.trim(), system: stored.system, user };

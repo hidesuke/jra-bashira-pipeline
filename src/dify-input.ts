@@ -24,51 +24,103 @@ export function fillRaceUser(
   return text;
 }
 
-/** Dify のコース特徴ワークフローへ渡るレース基本情報だけ。集計は入れない。 */
-export function courseUserMessage(input: { race: RaceRef; raceRow: Record<string, unknown> | null; baba: unknown }): string {
-  const row = input.raceRow;
-  const surface = row ? stringField(row, "surface") : null;
-  const distance = row ? numberField(row, "distance") : null;
-  const lines = [
-    "コースの特徴を書くためのレース条件です。",
-    "",
-    `- 日付: ${input.race.date}`,
-    `- 開催場: ${input.race.venue}`,
-    `- レース番号: ${input.race.raceNumber}`,
-    `- レース名: ${row ? stringField(row, "race_name_main") ?? "なし" : "なし"}`,
-    `- グレード: ${row ? stringField(row, "grade") ?? "なし" : "なし"}`,
-    `- 馬場: ${surface ?? "不明"}`,
-    `- 距離: ${distance == null ? "不明" : distance}`,
-    `- コース替わり: ${row ? stringField(row, "rail_type") ?? "不明" : "不明"}`,
-    `- 天気: ${weatherOf(row, input.baba)}`,
-    `- 馬場状態: ${conditionOf(row, input.baba, surface)}`,
-  ];
-  return lines.join("\n");
+/** Dify「[中央競馬]コースの特徴」ユーザー文。入力は競馬場・芝ダート障害・距離だけ。 */
+export const COURSE_USER_TOKENS = {
+  course: "{{#1788717846587.course#}}",
+  type: "{{#1788717846587.type#}}",
+  distance: "{{#1788717846587.distance#}}",
+} as const;
+
+export function fillCourseUser(template: string, values: { course: string; type: string; distance: string }): string {
+  let text = template;
+  for (const [key, token] of Object.entries(COURSE_USER_TOKENS)) {
+    text = text.split(token).join(values[key as keyof typeof values]);
+  }
+  if (text.includes("{{#")) {
+    throw new JobError("コース特徴のユーザー文に未置換の Dify 変数が残っています", false);
+  }
+  return text;
 }
 
-export function weatherOf(row: Record<string, unknown> | null, baba: unknown): string {
-  return (row ? stringField(row, "weather") : null) ?? stringFromBaba(baba, "weather") ?? "不明";
+export interface MergedGoing {
+  /** 天気。BASHIRA の weather が baba より優先。 */
+  weather: string;
+  /** 馬場状態。BASHIRA の track_condition が baba の芝/ダート区分より優先。 */
+  condition: string;
+  /** クッション値・含水率など baba にしか無い詳細。Dify はこれを備考へ入れていた。 */
+  babaDetail: string;
 }
 
-export function conditionOf(row: Record<string, unknown> | null, baba: unknown, surface: string | null): string {
-  return (row ? stringField(row, "track_condition") : null) ?? babaCondition(baba, surface) ?? "不明";
+/**
+ * 馬場の土台は baba（/baba/latest）。同じ項目は BASHIRA get_races で上書きする。
+ * クッション値・含水率・使用コース・芝丈は baba のまま残す。
+ */
+export function mergeGoing(input: { raceRow: Record<string, unknown> | null; baba: unknown; surface: string | null }): MergedGoing {
+  const venue = babaVenue(input.baba);
+  const bashiraWeather = input.raceRow ? stringField(input.raceRow, "weather") : null;
+  const bashiraCondition = input.raceRow ? stringField(input.raceRow, "track_condition") : null;
+  const babaWeather = venue ? stringField(venue, "weather") : null;
+  const babaCondition = surfaceCondition(venue, input.surface);
+  return {
+    weather: bashiraWeather ?? babaWeather ?? "不明",
+    condition: bashiraCondition ?? babaCondition ?? "不明",
+    babaDetail: babaDetail(venue),
+  };
 }
 
-function babaCondition(baba: unknown, surface: string | null): string | null {
-  const venue = babaVenue(baba);
+/** Dify の remarks は「日付 場 レース ｜ 馬場サマリ」。ユーザー備考があればその前に置く。 */
+export function composeRemarks(userRemarks: string, detail: string, race: Pick<RaceRef, "date" | "venueCode" | "raceNumber">): string {
+  const baba = detail ? `${race.date} 場:${race.venueCode} ${race.raceNumber}R ｜ ${detail}` : "";
+  const text = [userRemarks.trim(), baba].filter((part) => part !== "").join("\n");
+  return text || "なし";
+}
+
+function surfaceCondition(venue: Record<string, unknown> | null, surface: string | null): string | null {
   if (!venue) return null;
-  const key = surface === "ダート" ? "dirt" : surface === "障害" ? "jump" : "turf";
+  const key = surface === "ダート" ? "dirt" : surface === "芝" ? "turf" : null;
+  if (!key) return null;
   const block = venue[key];
   if (!block || typeof block !== "object") return null;
-  const condition = (block as { condition?: unknown }).condition;
-  return typeof condition === "string" && condition.trim() !== "" ? condition : null;
+  return stringField(block as Record<string, unknown>, "condition");
 }
 
-function stringFromBaba(baba: unknown, key: string): string | null {
-  const venue = babaVenue(baba);
-  if (!venue) return null;
-  const value = venue[key];
-  return typeof value === "string" && value.trim() !== "" ? value : null;
+function babaDetail(venue: Record<string, unknown> | null): string {
+  if (!venue) return "";
+  const parts: string[] = [];
+  const measuredAt = stringField(venue, "measuredAt");
+  if (measuredAt) parts.push(`馬場[${measuredAt}]`);
+  const cushion = numberField(venue, "cushion");
+  if (cushion != null) parts.push(`クッション値${trimNum(cushion)}`);
+  const turf = moistureText("芝", venue.turf);
+  const dirt = moistureText("ダート", venue.dirt);
+  if (turf) parts.push(turf);
+  if (dirt) parts.push(dirt);
+  const rain = numberField(venue, "rainfallMm");
+  if (rain != null) parts.push(`当日雨量${trimNum(rain)}mm`);
+  const used = stringField(venue, "usedCourse");
+  if (used) parts.push(`使用コース:${used}`);
+  const length = stringField(venue, "turfLength");
+  if (length) parts.push(length);
+  const turfState = stringField(venue, "turfCondition");
+  if (turfState) parts.push(`芝の状態:${turfState}`);
+  return parts.join(" / ");
+}
+
+function moistureText(label: string, block: unknown): string | null {
+  if (!block || typeof block !== "object") return null;
+  const row = block as Record<string, unknown>;
+  const goal = numberField(row, "goal");
+  const corner4 = numberField(row, "corner4");
+  const goalCondition = stringField(row, "goalCondition");
+  const corner4Condition = stringField(row, "corner4Condition");
+  if (goal == null && corner4 == null && !goalCondition && !corner4Condition) return null;
+  const bits = [`含水率 ゴール前${goal == null ? "—" : trimNum(goal)} 4角${corner4 == null ? "—" : trimNum(corner4)}`];
+  if (goalCondition || corner4Condition) bits.push(`区分 ゴール前${goalCondition ?? "—"} 4角${corner4Condition ?? "—"}`);
+  return `${label}:${bits.join(" ")}`;
+}
+
+function trimNum(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(value);
 }
 
 function babaVenue(baba: unknown): Record<string, unknown> | null {
