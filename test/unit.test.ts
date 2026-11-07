@@ -4,7 +4,16 @@ import { identifyCaller, verifyAccessJwt } from "../src/access";
 import { ExternalBudget, budgetedFetch } from "../src/budget";
 import { cronSkipReason } from "../src/cron";
 import { decryptJson, encryptJson, importAesKey, safeEqual } from "../src/crypto-util";
-import { composeRemarks, COURSE_USER_TOKENS, fillCourseUser, fillRaceUser, mergeGoing, RACE_USER_TOKENS } from "../src/dify-input";
+import {
+  composeRemarks,
+  COURSE_USER_DIFY_TOKENS,
+  COURSE_USER_PLACEHOLDERS,
+  fillCourseUser,
+  fillRaceUser,
+  mergeGoing,
+  RACE_USER_DIFY_TOKENS,
+  RACE_USER_PLACEHOLDERS,
+} from "../src/dify-input";
 import { extractRaceMarkdown } from "../src/extract-prediction";
 import { PAST_RUN_LIMIT, selectPastRuns } from "../src/form";
 import { parseRacePrediction } from "../src/gemini";
@@ -444,31 +453,99 @@ describe("dify markdown blocks", () => {
 describe("dify v1 inputs", () => {
   const race = { raceKey: "20261107-03-11", raceId: "20261107-03-11", date: "2026-11-07", venue: "福島", venueCode: "03", raceNumber: 11 };
 
-  it("fills only the Dify user slots", () => {
+  it("names the user slots and keeps the old Dify node ids", () => {
+    expect(RACE_USER_PLACEHOLDERS).toEqual({
+      umabashira: "{{umabashira}}",
+      course_analysis: "{{course_analysis}}",
+      weather: "{{weather}}",
+      condition: "{{condition}}",
+      remarks: "{{remarks}}",
+    });
+    expect(RACE_USER_DIFY_TOKENS).toEqual({
+      umabashira: "{{#1788721223615.output#}}",
+      course_analysis: "{{#1788721380442.output#}}",
+      weather: "{{#1788103991048.weathre#}}",
+      condition: "{{#1788103991048.condition#}}",
+      remarks: "{{#1787386477043.remarks#}}",
+    });
+    expect(COURSE_USER_PLACEHOLDERS).toEqual({
+      venue: "{{venue}}",
+      surface: "{{surface}}",
+      distance: "{{distance}}",
+    });
+    expect(COURSE_USER_DIFY_TOKENS).toEqual({
+      venue: "{{#1788717846587.course#}}",
+      surface: "{{#1788717846587.type#}}",
+      distance: "{{#1788717846587.distance#}}",
+    });
+  });
+
+  it.each([
+    ["placeholders", RACE_USER_PLACEHOLDERS, COURSE_USER_PLACEHOLDERS],
+    ["Dify tokens", RACE_USER_DIFY_TOKENS, COURSE_USER_DIFY_TOKENS],
+  ] as const)("fills %s in the user text", (_label, raceTokens, courseTokens) => {
     const filled = fillRaceUser(
-      [
-        RACE_USER_TOKENS.umabashira,
-        RACE_USER_TOKENS.course,
-        RACE_USER_TOKENS.weather,
-        RACE_USER_TOKENS.condition,
-        RACE_USER_TOKENS.remarks,
-      ].join("\n"),
+      [raceTokens.umabashira, raceTokens.course_analysis, raceTokens.weather, raceTokens.condition, raceTokens.remarks].join("\n"),
       {
         umabashira: "馬柱本文",
-        course: "コース本文",
+        course_analysis: "コース本文",
         weather: "晴",
         condition: "良",
         remarks: "なし",
       },
     );
     expect(filled).toBe(["馬柱本文", "コース本文", "晴", "良", "なし"].join("\n"));
-    expect(filled).not.toContain("{{#");
-    const course = fillCourseUser(
-      [COURSE_USER_TOKENS.course, COURSE_USER_TOKENS.type, COURSE_USER_TOKENS.distance].join("\n"),
-      { course: "福島", type: "芝", distance: "1600" },
-    );
+    expect(filled).not.toContain("{{");
+    const course = fillCourseUser([courseTokens.venue, courseTokens.surface, courseTokens.distance].join("\n"), {
+      venue: "福島",
+      surface: "芝",
+      distance: "1600",
+    });
     expect(course).toBe(["福島", "芝", "1600"].join("\n"));
-    expect(course).not.toContain("{{#");
+    expect(course).not.toContain("{{");
+  });
+
+  it("fills a mix of new placeholders and old Dify tokens", () => {
+    const filled = fillRaceUser(`${RACE_USER_PLACEHOLDERS.umabashira}\n${RACE_USER_DIFY_TOKENS.weather}`, {
+      umabashira: "馬柱本文",
+      course_analysis: "コース本文",
+      weather: "晴",
+      condition: "良",
+      remarks: "なし",
+    });
+    expect(filled).toBe("馬柱本文\n晴");
+    const course = fillCourseUser(`${COURSE_USER_DIFY_TOKENS.venue} ${COURSE_USER_PLACEHOLDERS.distance}`, {
+      venue: "福島",
+      surface: "芝",
+      distance: "1600",
+    });
+    expect(course).toBe("福島 1600");
+  });
+
+  it("rejects a leftover {{# or {{name}} placeholder", () => {
+    const raceValues = {
+      umabashira: "馬柱本文",
+      course_analysis: "コース本文",
+      weather: "晴",
+      condition: "良",
+      remarks: "なし",
+    };
+    const courseValues = { venue: "福島", surface: "芝", distance: "1600" };
+    expect(() => fillRaceUser(`${RACE_USER_PLACEHOLDERS.weather}\n{{unknown}}`, raceValues)).toThrow(JobError);
+    expect(() => fillRaceUser(`${RACE_USER_PLACEHOLDERS.weather}\n{{#999.leftover#}}`, raceValues)).toThrow(/差し込み/);
+    expect(() => fillCourseUser(`${COURSE_USER_PLACEHOLDERS.venue}\n{{surface_extra}}`, courseValues)).toThrow(JobError);
+    expect(() => fillCourseUser(`${COURSE_USER_DIFY_TOKENS.venue} {{#999.x#}}`, courseValues)).toThrow(/差し込み/);
+    expect(() => fillRaceUser("{{#1788103991048Xweathre#}}", raceValues)).toThrow(JobError);
+    const leftover = (() => {
+      try {
+        fillRaceUser("{{weather}}", { ...raceValues, weather: "晴{{x}}" });
+        return null;
+      } catch (err) {
+        return err;
+      }
+    })();
+    expect(leftover).toBeInstanceOf(JobError);
+    expect((leftover as JobError).retryable).toBe(false);
   });
 
   it("lets BASHIRA weather and going override baba, and keeps cushion and moisture", () => {

@@ -357,8 +357,8 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       fetcher: deps.fetch,
       system: coursePrompt.system,
       prompt: fillCourseUser(coursePrompt.user, {
-        course: state.race.venue,
-        type: surface ?? "不明",
+        venue: state.race.venue,
+        surface: surface ?? "不明",
         distance: distance == null ? "不明" : String(distance),
       }),
     });
@@ -370,7 +370,7 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       system: racePrompt.system,
       prompt: fillRaceUser(racePrompt.user, {
         umabashira: renderUmabashira({ race: state.race, entries: state.entries, formTasks: state.formTasks ?? [] }),
-        course: course.text,
+        course_analysis: course.text,
         weather: going.weather,
         condition: going.condition,
         remarks: composeRemarks(state.remarks ?? "", going.babaDetail, state.race),
