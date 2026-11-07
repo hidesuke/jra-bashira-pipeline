@@ -2,6 +2,7 @@
  * Dify「Notion用にに出力整形」と同じ規則で Markdown を Notion ブロックにする。
  * 見出しは #### / ### / ## / # の順。箇条書きは `- ` と `* `。
  * 区切りは --- / *** / ___。``` は code。**太字** は annotations.bold。
+ * `>` で始まる行は callout。連続する行は改行で 1 つにまとめる。
  * 各 rich_text は 2000 文字まで。Dify のコードは超過分を切るが、ここでは
  * 同じ装飾の続きとして残す（長いコース分析を落とさない）。
  * 追加リクエストは 100 ブロックずつ（Dify の chunk_size）。
@@ -48,6 +49,13 @@ export function markdownToNotionBlocks(rawInput: string): Array<Record<string, u
   let inCode = false;
   let language = "plain text";
   let codeLines: string[] = [];
+  let quoteLines: string[] = [];
+
+  const flushQuote = () => {
+    if (quoteLines.length === 0) return;
+    children.push(calloutBlock(quoteLines.join("\n")));
+    quoteLines = [];
+  };
 
   const pushCode = () => {
     const content = codeLines.join("\n");
@@ -68,6 +76,7 @@ export function markdownToNotionBlocks(rawInput: string): Array<Record<string, u
   for (const line of lines) {
     const stripped = line.trim();
     if (stripped.startsWith("```")) {
+      flushQuote();
       if (!inCode) {
         inCode = true;
         const lang = stripped.slice(3).trim().toLowerCase();
@@ -84,7 +93,16 @@ export function markdownToNotionBlocks(rawInput: string): Array<Record<string, u
       codeLines.push(line.replace(/\r$/, ""));
       continue;
     }
-    if (!stripped) continue;
+    if (!stripped) {
+      flushQuote();
+      continue;
+    }
+    if (stripped.startsWith(">")) {
+      const rest = stripped.slice(1);
+      quoteLines.push(rest.startsWith(" ") ? rest.slice(1) : rest);
+      continue;
+    }
+    flushQuote();
     if (stripped === "---" || stripped === "***" || stripped === "___") {
       children.push(dividerBlock());
       continue;
@@ -112,7 +130,20 @@ export function markdownToNotionBlocks(rawInput: string): Array<Record<string, u
       paragraph: { rich_text: parseRichText(stripped) },
     });
   }
+  flushQuote();
   return children;
+}
+
+export function calloutBlock(text: string): Record<string, unknown> {
+  return {
+    object: "block",
+    type: "callout",
+    callout: {
+      rich_text: parseRichText(text),
+      icon: { type: "emoji", emoji: "💡" },
+      color: "gray_background",
+    },
+  };
 }
 
 export function dividerBlock(): Record<string, unknown> {

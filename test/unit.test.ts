@@ -386,6 +386,44 @@ describe("dify markdown blocks", () => {
     expect(code.rich_text[0]?.text.content).toBe('{"a":1}');
   });
 
+  it("merges consecutive blockquotes into one callout and keeps bold", () => {
+    const blocks = markdownToNotionBlocks(
+      [
+        "> **【指数サマリー】** 最高指数: 89点",
+        "> 1-2位差: 2点",
+        "",
+        "> 別の注記",
+        "本文",
+        "```",
+        "> コードの中",
+        "```",
+      ].join("\n"),
+    );
+    expect(blocks.map((block) => block.type)).toEqual(["callout", "callout", "paragraph", "code"]);
+    const callout = blocks[0]?.callout as {
+      color: string;
+      icon: { type: string; emoji: string };
+      rich_text: Array<{ text: { content: string }; annotations?: { bold?: boolean } }>;
+    };
+    expect(callout.icon).toEqual({ type: "emoji", emoji: "💡" });
+    expect(callout.color).toBe("gray_background");
+    expect(callout.rich_text[0]?.text.content).toBe("【指数サマリー】");
+    expect(callout.rich_text[0]?.annotations?.bold).toBe(true);
+    expect(callout.rich_text[1]?.text.content).toBe(" 最高指数: 89点\n1-2位差: 2点");
+    const second = blocks[1]?.callout as { rich_text: Array<{ text: { content: string } }> };
+    expect(second.rich_text[0]?.text.content).toBe("別の注記");
+    const code = blocks.at(-1)?.code as { rich_text: Array<{ text: { content: string } }> };
+    expect(code.rich_text[0]?.text.content).toBe("> コードの中");
+  });
+
+  it("caps callout rich text at 2000 characters", () => {
+    const blocks = markdownToNotionBlocks(`> ${"あ".repeat(2001)}`);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.type).toBe("callout");
+    const rich = (blocks[0]?.callout as { rich_text: Array<{ text: { content: string } }> }).rich_text;
+    expect(rich.map((part) => [...part.text.content].length)).toEqual([2000, 1]);
+  });
+
   it("splits rich text at 2000 characters and children into chunks of 100", () => {
     const blocks = markdownToNotionBlocks(`x${"あ".repeat(2000)}`);
     const rich = (blocks[0]?.paragraph as { rich_text: Array<{ text: { content: string } }> }).rich_text;
