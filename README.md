@@ -34,6 +34,8 @@ Git 接続の Cloudflare Workers Builds は、リポジトリ直下をルート�
 - Queue `jra-bashira-race`（producer / consumer の名前。id フィールドは無い）
 - Durable Object `BashiraAuth`（`migrations` の `new_sqlite_classes`。SQLite）
 
+失敗したメッセージの待ち行列 `jra-bashira-race-dlq` は、この deploy では作られません。先に `npx wrangler queues create jra-bashira-race-dlq` を実行してください。無い状態で deploy すると失敗します。
+
 ローカルで同じことをするときは `npx wrangler login` のあと `npx wrangler deploy` です。この作業ではデプロイしません。
 
 ## シークレット

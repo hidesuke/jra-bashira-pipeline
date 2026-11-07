@@ -49,6 +49,12 @@
         "max_batch_timeout": 1,
         // src/types.ts の QUEUE_MAX_RETRIES と同じ数にする。
         "max_retries": 3,
+        // 失敗をすぐ再配送すると、同じジョブキーの KV 書き込みが 1 秒制限に当たる。
+        "retry_delay": 30,
+        // 再試行を使い切ったメッセージは捨てず、ここに残す。
+        // このキューは deploy では作られない。先に次を実行する:
+        // npx wrangler queues create jra-bashira-race-dlq
+        "dead_letter_queue": "jra-bashira-race-dlq",
         "max_concurrency": 1
       }
     ]

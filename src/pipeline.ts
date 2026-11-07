@@ -6,8 +6,8 @@ import { composeRemarks, fillCourseUser, fillRaceUser, mergeGoing } from "./dify
 import { readRacePrediction } from "./extract-prediction";
 import { buildFormTasks, FORM_BATCH_SIZE, selectPastRuns } from "./form";
 import { generateText } from "./gemini";
-import { loadJob, saveJob, type JobState } from "./job";
-import { keys } from "./kv";
+import { JobWriter, loadJob, type JobState } from "./job";
+import { keys, sleepMs } from "./kv";
 import { loadModels } from "./models";
 import {
   assertDatabaseSchema,
@@ -59,6 +59,12 @@ export interface PipelineDeps {
   baba?: BabaBinding;
   fetch?: typeof fetch;
   log?(event: string, fields?: Record<string, unknown>): void;
+  /** 同一ジョブキーの書き込み間隔。省略時は Date.now。 */
+  clock?: () => number;
+  /** KV の 429 バックオフと、書き込み間隔が足りないときの待ち。省略時は setTimeout。 */
+  sleep?: (ms: number) => Promise<void>;
+  /** 1 配送で共有する。handleJobMessage が無ければ作る。 */
+  jobWriter?: JobWriter;
 }
 
 const RACE_COLUMNS = [
@@ -117,20 +123,51 @@ export async function handleJobMessage(
   deps: PipelineDeps,
   delivery?: Delivery,
 ): Promise<"ack" | "retry"> {
+  const bound = bindWriter(deps);
   try {
-    await dispatch(message, deps);
+    await dispatch(message, bound);
     return "ack";
   } catch (err) {
     const retry = isRetryable(err) && !isFinalAttempt(delivery);
-    await persistFailure(message, deps, err, retry);
-    if (!retry) await releaseLock(deps.kv, raceKeyOf(message));
-    deps.log?.("job_failed", {
+    const persisted = await persistFailure(message, bound, err, retry);
+    if (!retry && persisted) await releaseLock(bound.kv, raceKeyOf(message));
+    bound.log?.("job_failed", {
       raceKey: raceKeyOf(message),
       retryable: retry,
+      persisted,
       attempt: delivery?.attempt,
       error: errorMessage(err),
     });
-    return retry ? "retry" : "ack";
+    if (retry || !persisted) return "retry";
+    return "ack";
+  }
+}
+
+function bindWriter(deps: PipelineDeps): PipelineDeps {
+  if (deps.jobWriter) return deps;
+  return {
+    ...deps,
+    jobWriter: new JobWriter(deps.kv, deps.clock ?? Date.now, deps.sleep ?? sleepMs),
+  };
+}
+
+function writer(deps: PipelineDeps): JobWriter {
+  if (!deps.jobWriter) throw new Error("内部エラー: ジョブの書き込み口がありません");
+  return deps.jobWriter;
+}
+
+async function commitJob(deps: PipelineDeps, state: JobState): Promise<void> {
+  await writer(deps).flush(state);
+}
+
+async function checkpoint(deps: PipelineDeps, state: JobState): Promise<void> {
+  try {
+    await writer(deps).saveIfDue(state);
+  } catch (err) {
+    deps.log?.("job_checkpoint_failed", {
+      raceKey: state.race.raceKey,
+      saveError: errorMessage(err),
+    });
   }
 }
 
@@ -268,7 +305,7 @@ async function collect(message: Extract<JobMessage, { kind: "start" }>, deps: Pi
     notionPageId: null,
     updatedAt: deps.now().toISOString(),
   };
-  await saveJob(deps.kv, state);
+  await commitJob(deps, state);
   await enqueuePhase(state, deps);
 }
 
@@ -278,7 +315,7 @@ async function runForm(state: JobState, deps: PipelineDeps): Promise<void> {
   if (pending.length === 0) {
     state.phase = phaseAfterForm(state);
     state.updatedAt = deps.now().toISOString();
-    await saveJob(deps.kv, state);
+    await commitJob(deps, state);
     await enqueuePhase(state, deps);
     return;
   }
@@ -287,7 +324,15 @@ async function runForm(state: JobState, deps: PipelineDeps): Promise<void> {
     const result = await deps.bashira.callTool("get_entries", task.args);
     if (!result.ok) {
       state.updatedAt = deps.now().toISOString();
-      await saveJob(deps.kv, state);
+      try {
+        await commitJob(deps, state);
+      } catch (saveErr) {
+        deps.log?.("job_checkpoint_failed", {
+          raceKey: state.race.raceKey,
+          error: result.message,
+          saveError: errorMessage(saveErr),
+        });
+      }
       throw toolError(result);
     }
     const ambiguity = ambiguousNameMessage(result.data);
@@ -303,11 +348,11 @@ async function runForm(state: JobState, deps: PipelineDeps): Promise<void> {
       }
     }
     state.updatedAt = deps.now().toISOString();
-    await saveJob(deps.kv, state);
+    await checkpoint(deps, state);
   }
   state.phase = tasks.some((task) => task.status === "pending") ? "form" : phaseAfterForm(state);
   state.updatedAt = deps.now().toISOString();
-  await saveJob(deps.kv, state);
+  await commitJob(deps, state);
   await enqueuePhase(state, deps);
 }
 
@@ -320,7 +365,7 @@ async function runStats(state: JobState, deps: PipelineDeps): Promise<void> {
   if (pending.length === 0) {
     state.phase = "predict";
     state.updatedAt = deps.now().toISOString();
-    await saveJob(deps.kv, state);
+    await commitJob(deps, state);
     await enqueuePhase(state, deps);
     return;
   }
@@ -340,7 +385,7 @@ async function runStats(state: JobState, deps: PipelineDeps): Promise<void> {
   }
   state.updatedAt = deps.now().toISOString();
   state.phase = state.statTasks.some((task) => task.status === "pending") ? "stats" : "predict";
-  await saveJob(deps.kv, state);
+  await commitJob(deps, state);
   if (!result.ok) throw toolError(result);
   await enqueuePhase(state, deps);
 }
@@ -394,7 +439,7 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
   }
   state.phase = "notion";
   state.updatedAt = deps.now().toISOString();
-  await saveJob(deps.kv, state);
+  await commitJob(deps, state);
   await enqueuePhase(state, deps);
 }
 
@@ -488,7 +533,7 @@ async function runNotion(state: JobState, deps: PipelineDeps): Promise<void> {
   state.phase = "done";
   state.error = undefined;
   state.updatedAt = deps.now().toISOString();
-  await saveJob(deps.kv, state);
+  await commitJob(deps, state);
   await releaseLock(deps.kv, state.race.raceKey);
 }
 
@@ -615,40 +660,53 @@ async function enqueuePhase(state: JobState, deps: PipelineDeps): Promise<void> 
   }
 }
 
-async function persistFailure(message: JobMessage, deps: PipelineDeps, err: unknown, retry: boolean): Promise<void> {
-  const raceKey = raceKeyOf(message);
-  const state = await loadJob(deps.kv, raceKey);
+/** 失敗理由をジョブに残す。保存自体が失敗しても投げず、元のエラーを隠さない。 */
+async function persistFailure(message: JobMessage, deps: PipelineDeps, err: unknown, retry: boolean): Promise<boolean> {
   const text = errorMessage(err);
-  const updatedAt = deps.now().toISOString();
-  if (!state || (message.kind === "start" && state.runId !== message.runId)) {
-    if (message.kind !== "start") return;
-    await saveJob(deps.kv, {
-      runId: message.runId,
-      race: message.race,
-      requestedBy: message.requestedBy,
-      phase: retry ? "collect" : "error",
-      error: retry ? undefined : text,
-      remarks: message.kind === "start" ? message.remarks?.trim() ?? "" : "",
-      baba: null,
-      raceRow: null,
-      entries: [],
-      formTasks: [],
-      odds: null,
-      courseVariant: null,
-      statTasks: [],
-      prediction: null,
-      notionPageId: null,
-      updatedAt,
+  try {
+    const raceKey = raceKeyOf(message);
+    const state = await loadJob(deps.kv, raceKey);
+    const updatedAt = deps.now().toISOString();
+    if (!state || (message.kind === "start" && state.runId !== message.runId)) {
+      if (message.kind !== "start") return true;
+      await commitJob(deps, {
+        runId: message.runId,
+        race: message.race,
+        requestedBy: message.requestedBy,
+        phase: retry ? "collect" : "error",
+        error: retry ? undefined : text,
+        remarks: message.remarks?.trim() ?? "",
+        baba: null,
+        raceRow: null,
+        entries: [],
+        formTasks: [],
+        odds: null,
+        courseVariant: null,
+        statTasks: [],
+        prediction: null,
+        notionPageId: null,
+        updatedAt,
+      });
+      return true;
+    }
+    if (state.runId !== runIdOf(message)) return true;
+    // 再試行中で進捗はもう書いてある。同じキーを直後に上書きしない。
+    if (retry && writer(deps).hasWritten()) return true;
+    state.updatedAt = updatedAt;
+    if (!retry) {
+      state.phase = "error";
+      state.error = text;
+    }
+    await commitJob(deps, state);
+    return true;
+  } catch (saveErr) {
+    deps.log?.("job_persist_failed", {
+      raceKey: raceKeyOf(message),
+      error: text,
+      saveError: errorMessage(saveErr),
     });
-    return;
+    return false;
   }
-  if (state.runId !== runIdOf(message)) return;
-  state.updatedAt = updatedAt;
-  if (!retry) {
-    state.phase = "error";
-    state.error = text;
-  }
-  await saveJob(deps.kv, state);
 }
 
 async function releaseLock(kv: KvStore, raceKey: string): Promise<void> {
