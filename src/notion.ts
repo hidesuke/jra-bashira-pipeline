@@ -58,7 +58,7 @@ export type NotionDecision =
   | { action: "update"; pageId: string }
   | { action: "error"; message: string };
 
-/** Dify のページ（本文が BASHIRA で始まらないもの）は候補にしない。複数の BASHIRA ページはエラー。 */
+/** Dify のページ（本文のどこにも BASHIRAで取得 が無いもの）は候補にしない。複数の BASHIRA ページはエラー。 */
 export function decideNotionTarget(input: NotionDecisionInput): NotionDecision {
   if (input.truncated) {
     return { action: "error", message: "同じレースの Notion 検索が打ち切られました。どれが BASHIRA のページか判断できないので止めます" };
@@ -103,13 +103,17 @@ export function plainText(rich: unknown): string {
     .join("");
 }
 
-export function firstParagraphIsBashira(blocks: unknown): boolean {
+/** 取得済みブロックのどこかに BASHIRAで取得 があるか。先頭行ではなく末尾の灰色フッターも見る。 */
+export function blocksIncludeBashira(blocks: unknown): boolean {
   if (!Array.isArray(blocks)) return false;
   for (const block of blocks) {
     if (!block || typeof block !== "object") continue;
-    if ((block as { type?: string }).type !== "paragraph") return false;
-    const text = plainText((block as { paragraph?: { rich_text?: unknown } }).paragraph?.rich_text);
-    return text.trimStart().startsWith(BASHIRA_MARKER);
+    const record = block as Record<string, unknown>;
+    const type = record.type;
+    const body = typeof type === "string" ? record[type] : undefined;
+    if (!body || typeof body !== "object") continue;
+    const text = plainText((body as { rich_text?: unknown }).rich_text);
+    if (text.includes(BASHIRA_MARKER)) return true;
   }
   return false;
 }

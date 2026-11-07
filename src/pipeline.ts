@@ -1,5 +1,6 @@
 import { fetchBaba, babaFailure } from "./baba";
 import { pageBlocks, pageTitle } from "./body";
+import { chunkChildren } from "./notion-blocks";
 import { ExternalBudget } from "./budget";
 import { generateText, parseRacePrediction } from "./gemini";
 import { loadJob, saveJob, type JobState } from "./job";
@@ -8,8 +9,8 @@ import { loadModels } from "./models";
 import {
   assertDatabaseSchema,
   assertSelectValues,
+  blocksIncludeBashira,
   decideNotionTarget,
-  firstParagraphIsBashira,
   notionFetch,
   notionProperties,
   pageMatchesRace,
@@ -384,21 +385,14 @@ async function runNotion(state: JobState, deps: PipelineDeps): Promise<void> {
   const pages = [];
   for (const result of results.slice(0, 8)) {
     if (!result.id) continue;
-    const children = await notionOk(
-      budget,
-      token,
-      `/blocks/${result.id}/children?page_size=5`,
-      { method: "GET" },
-      deps.fetch,
-    );
-    const blocks = (children as { results?: unknown }).results;
-    pages.push({ id: result.id, isBashira: firstParagraphIsBashira(blocks) });
+    pages.push({ id: result.id, isBashira: await pageHasBashiraMarker(budget, token, result.id, deps.fetch) });
   }
   const decision = decideNotionTarget({ stored, pages, truncated });
   if (decision.action === "error") throw new JobError(decision.message, false);
   const raceName = state.raceRow ? stringField(state.raceRow, "race_name_main") : null;
+  const grade = state.raceRow ? stringField(state.raceRow, "grade") : null;
   const properties = notionProperties({
-    title: pageTitle(state.race, raceName),
+    title: pageTitle(state.race, raceName, grade),
     race: state.race,
     指数分布: state.prediction.指数分布,
     自信度: state.prediction.自信度,
@@ -421,16 +415,21 @@ async function runNotion(state: JobState, deps: PipelineDeps): Promise<void> {
   });
   let pageId: string;
   if (decision.action === "create") {
+    const [first, ...rest] = chunkChildren(children);
     const created = await notionOk(
       budget,
       token,
       "/pages",
-      { method: "POST", body: JSON.stringify({ parent: { database_id: databaseId }, properties, children }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ parent: { database_id: databaseId }, properties, children: first ?? [] }),
+      },
       deps.fetch,
     );
     const id = (created as { id?: unknown }).id;
     if (typeof id !== "string") throw new JobError("Notion がページ ID を返しませんでした", true);
     pageId = id;
+    await appendChildren(budget, token, pageId, rest.flat(), deps.fetch);
   } else {
     pageId = decision.pageId;
     await notionOk(budget, token, `/pages/${pageId}`, { method: "PATCH", body: JSON.stringify({ properties }) }, deps.fetch);
@@ -460,6 +459,25 @@ async function loadStoredPage(
   return { id: storedId, found: !archived, matchesRace: pageMatchesRace(response.body, race) };
 }
 
+async function pageHasBashiraMarker(
+  budget: ExternalBudget,
+  token: string,
+  pageId: string,
+  fetcher?: typeof fetch,
+): Promise<boolean> {
+  let cursor: string | undefined;
+  for (let page = 0; page < 8; page++) {
+    const query = new URLSearchParams({ page_size: "100" });
+    if (cursor) query.set("start_cursor", cursor);
+    const children = await notionOk(budget, token, `/blocks/${pageId}/children?${query.toString()}`, { method: "GET" }, fetcher);
+    const body = children as { results?: unknown; has_more?: boolean; next_cursor?: string | null };
+    if (blocksIncludeBashira(body.results)) return true;
+    if (!body.has_more || !body.next_cursor) return false;
+    cursor = body.next_cursor;
+  }
+  return false;
+}
+
 async function replaceChildren(
   budget: ExternalBudget,
   token: string,
@@ -482,8 +500,17 @@ async function replaceChildren(
       if (removed.status >= 400 && removed.status !== 404) throw notionStatus(removed.status, removed.body);
     }
   }
-  for (let index = 0; index < children.length; index += 50) {
-    const chunk = children.slice(index, index + 50);
+  await appendChildren(budget, token, pageId, children, fetcher);
+}
+
+async function appendChildren(
+  budget: ExternalBudget,
+  token: string,
+  pageId: string,
+  children: Array<Record<string, unknown>>,
+  fetcher?: typeof fetch,
+): Promise<void> {
+  for (const chunk of chunkChildren(children)) {
     await notionOk(
       budget,
       token,
