@@ -9,6 +9,8 @@ export const STATS_BATCH_SIZE = 8;
 export const STATS_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 export const MODEL_LIST_TTL_MS = 10 * 60 * 1000;
 export const LOCK_TTL_SECONDS = 15 * 60;
+/** wrangler.jsonc の queues.consumers.max_retries と同じ。 */
+export const QUEUE_MAX_RETRIES = 3;
 export const BASHIRA_MARKER = "BASHIRAで取得";
 export const DEFAULT_MODEL_NAME = "gemini-flash-latest";
 

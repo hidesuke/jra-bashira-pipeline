@@ -98,16 +98,38 @@ const ENTRY_COLUMNS = [
 
 const SCRATCHED = new Set(["出走取消", "発走除外", "競走除外"]);
 
-export async function handleJobMessage(message: JobMessage, deps: PipelineDeps): Promise<"ack" | "retry"> {
+export interface Delivery {
+  /** Queue の attempts。1 始まり。 */
+  attempt: number;
+  /** wrangler.jsonc の max_retries。この回数に達した配送で打ち切る。 */
+  maxRetries: number;
+}
+
+export async function handleJobMessage(
+  message: JobMessage,
+  deps: PipelineDeps,
+  delivery?: Delivery,
+): Promise<"ack" | "retry"> {
   try {
     await dispatch(message, deps);
     return "ack";
   } catch (err) {
-    await persistFailure(message, deps, err);
-    if (!isRetryable(err)) await releaseLock(deps.kv, raceKeyOf(message));
-    deps.log?.("job_failed", { raceKey: raceKeyOf(message), retryable: isRetryable(err), error: errorMessage(err) });
-    return isRetryable(err) ? "retry" : "ack";
+    const retry = isRetryable(err) && !isFinalAttempt(delivery);
+    await persistFailure(message, deps, err, retry);
+    if (!retry) await releaseLock(deps.kv, raceKeyOf(message));
+    deps.log?.("job_failed", {
+      raceKey: raceKeyOf(message),
+      retryable: retry,
+      attempt: delivery?.attempt,
+      error: errorMessage(err),
+    });
+    return retry ? "retry" : "ack";
   }
+}
+
+function isFinalAttempt(delivery: Delivery | undefined): boolean {
+  if (!delivery) return false;
+  return delivery.attempt >= delivery.maxRetries;
 }
 
 async function dispatch(message: JobMessage, deps: PipelineDeps): Promise<void> {
@@ -516,18 +538,19 @@ async function enqueuePhase(state: JobState, deps: PipelineDeps): Promise<void> 
   }
 }
 
-async function persistFailure(message: JobMessage, deps: PipelineDeps, err: unknown): Promise<void> {
+async function persistFailure(message: JobMessage, deps: PipelineDeps, err: unknown, retry: boolean): Promise<void> {
   const raceKey = raceKeyOf(message);
   const state = await loadJob(deps.kv, raceKey);
   const text = errorMessage(err);
+  const updatedAt = deps.now().toISOString();
   if (!state || (message.kind === "start" && state.runId !== message.runId)) {
     if (message.kind !== "start") return;
     await saveJob(deps.kv, {
       runId: message.runId,
       race: message.race,
       requestedBy: message.requestedBy,
-      phase: isRetryable(err) ? "collect" : "error",
-      error: text,
+      phase: retry ? "collect" : "error",
+      error: retry ? undefined : text,
       baba: null,
       raceRow: null,
       entries: [],
@@ -536,19 +559,34 @@ async function persistFailure(message: JobMessage, deps: PipelineDeps, err: unkn
       statTasks: [],
       prediction: null,
       notionPageId: null,
-      updatedAt: deps.now().toISOString(),
+      updatedAt,
     });
     return;
   }
   if (state.runId !== runIdOf(message)) return;
-  state.error = text;
-  state.updatedAt = deps.now().toISOString();
-  if (!isRetryable(err)) state.phase = "error";
+  state.updatedAt = updatedAt;
+  if (!retry) {
+    state.phase = "error";
+    state.error = text;
+  }
   await saveJob(deps.kv, state);
 }
 
 async function releaseLock(kv: KvStore, raceKey: string): Promise<void> {
   await kv.delete(keys.lock(raceKey));
+}
+
+/** ロックが残っていても、終了済み・失敗済み・更新が止まったジョブは進行中にしない。 */
+export function blocksNewRun(
+  job: { phase: string; error?: string; updatedAt: string } | null,
+  nowMs: number,
+): boolean {
+  if (!job) return true;
+  if (job.phase === "error" || job.phase === "done") return false;
+  if (job.error) return false;
+  const updated = Date.parse(job.updatedAt);
+  if (!Number.isFinite(updated) || nowMs - updated > LOCK_TTL_SECONDS * 1000) return false;
+  return true;
 }
 
 export async function acquireLock(
@@ -560,8 +598,14 @@ export async function acquireLock(
 ): Promise<boolean> {
   const current = await kv.get(keys.lock(raceKey));
   if (current) {
-    const parsed = JSON.parse(current) as { expiresAt?: number };
-    if ((parsed.expiresAt ?? 0) > now.getTime()) return false;
+    let expiresAt = 0;
+    try {
+      expiresAt = (JSON.parse(current) as { expiresAt?: number }).expiresAt ?? 0;
+    } catch {
+      expiresAt = 0;
+    }
+    const lockFresh = expiresAt > now.getTime();
+    if (lockFresh && blocksNewRun(await loadJob(kv, raceKey), now.getTime())) return false;
   }
   await kv.put(
     keys.lock(raceKey),
