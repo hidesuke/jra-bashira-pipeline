@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "jra-bashira-predict",
+  "name": "jra-bashira-pipeline",
   "main": "src/index.ts",
   "compatibility_date": "2026-11-07",
   "compatibility_flags": ["nodejs_compat"],
@@ -23,8 +23,7 @@
     "STATS_MIN_STARTS": "30",
     "STATS_BROODMARE_SIRE_MIN_STARTS": "50",
     "DEFAULT_MODEL": "gemini-flash-latest",
-    "ACCESS_TEAM_DOMAIN": "https://YOUR_TEAM.cloudflareaccess.com",
-    "ACCESS_AUD": "YOUR_ACCESS_AUD_TAG",
+    "ACCESS_TEAM_DOMAIN": "https://hdsk.cloudflareaccess.com",
     "ACCESS_CLIENT_ID_GROK": "",
     "ACCESS_CLIENT_ID_MUSE": ""
   },
