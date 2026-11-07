@@ -28,17 +28,11 @@
     "ACCESS_CLIENT_ID_GROK": "",
     "ACCESS_CLIENT_ID_MUSE": ""
   },
-  "secrets": {
-    "required": ["GEMINI_API_KEY", "NOTION_TOKEN", "TOKEN_ENCRYPTION_KEY"]
-  },
+  // id を書かない。最初の wrangler deploy が KV を作る（Wrangler 4.45 以降）。
   "kv_namespaces": [
-    {
-      "binding": "APP_KV",
-      // wrangler kv namespace create APP_KV の id に差し替える。
-      "id": "00000000000000000000000000000000",
-      "preview_id": "00000000000000000000000000000000"
-    }
+    { "binding": "APP_KV" }
   ],
+  // queue は名前だけで、id は無い。同じ deploy が未作成なら Queue を作る。
   "queues": {
     "producers": [
       { "binding": "RACE_QUEUE", "queue": "jra-bashira-race" }
@@ -56,8 +50,8 @@
   "durable_objects": {
     "bindings": [{ "name": "BASHIRA_AUTH", "class_name": "BashiraAuth" }]
   },
-  // 新規 Worker は migrations ではなく宣言的 exports。
-  "exports": {
-    "BashiraAuth": { "type": "durable-object", "storage": "sqlite" }
-  }
+  // 最初の deploy で SQLite 版 Durable Object を作る。exports とは併用しない。
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["BashiraAuth"] }
+  ]
 }
