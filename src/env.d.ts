@@ -6,4 +6,6 @@ interface Env {
   TOKEN_ENCRYPTION_KEY: string;
   // ダッシュボードの Secret。vars には置かない。
   ACCESS_AUD: string;
+  // wrangler.jsonc の services。バインディングが無いテストとローカルでは未設定。
+  BABA?: Fetcher;
 }

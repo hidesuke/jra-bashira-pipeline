@@ -269,7 +269,7 @@ curl -sS "https://<worker>/admin/jobs?race_key=20261107-03-11" \
 
 成績は `stats:v2:` で KV に 7 日キャッシュします。
 
-馬場は `GET https://jra-dify-pipeline.hdsk.workers.dev/baba/latest` をジョブの最初に 1 回だけ取り、そのジョブに渡します。失敗しても予想は続け、理由を残します。
+馬場は `GET https://jra-dify-pipeline.hdsk.workers.dev/baba/latest` をジョブの最初に 1 回だけ取り、そのジョブに渡します。同じアカウントの `workers.dev` へ Worker から global fetch すると届かず 404 になるため、`BABA` サービスバインディング（`jra-dify-pipeline`）があるときは `env.BABA.fetch` で取ります。バインディングが無いテストとローカルでは global fetch に戻します。失敗しても予想は続け、HTTP ステータスと本文の先頭を理由として残します。
 
 オッズは `get_odds` の単勝です。種別（`odds_kind`）と観測時刻を日本時間で必ず残します。行が無いときは未発売、`no_bets` のときは発売票数なし、取得に失敗したときは取得エラーと書きます。取得に失敗しても出馬表に単勝があればそれを使い、その旨を残します。オッズが無くても予想は続けます。
 

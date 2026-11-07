@@ -65,5 +65,10 @@
   // 最初の deploy で SQLite 版 Durable Object を作る。exports とは併用しない。
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["BashiraAuth"] }
+  ],
+  // 同じアカウントの workers.dev へ global fetch すると届かず 404 になる。
+  // 馬場は jra-dify-pipeline のサービスバインディングで取る。
+  "services": [
+    { "binding": "BABA", "service": "jra-dify-pipeline" }
   ]
 }

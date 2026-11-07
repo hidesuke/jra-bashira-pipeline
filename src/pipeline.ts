@@ -1,4 +1,4 @@
-import { fetchBaba, babaFailure } from "./baba";
+import { fetchBaba, babaFailure, type BabaBinding } from "./baba";
 import { pageBlocks, pageTitle } from "./body";
 import { chunkChildren } from "./notion-blocks";
 import { ExternalBudget } from "./budget";
@@ -55,6 +55,8 @@ export interface PipelineDeps {
   bashira: BashiraPort;
   enqueue(message: JobMessage): Promise<void>;
   now(): Date;
+  /** 馬場 API のサービスバインディング。無いときは fetch。 */
+  baba?: BabaBinding;
   fetch?: typeof fetch;
   log?(event: string, fields?: Record<string, unknown>): void;
 }
@@ -164,7 +166,9 @@ async function collect(message: Extract<JobMessage, { kind: "start" }>, deps: Pi
       url: deps.config.babaUrl,
       venue: message.race.venue,
       budget,
+      binding: deps.baba,
       fetcher: deps.fetch,
+      log: deps.log,
     });
   } catch (err) {
     baba = babaFailure(err);
