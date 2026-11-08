@@ -101,6 +101,19 @@ export function decideNotionTarget(input: NotionDecisionInput): NotionDecision {
   return { action: "create" };
 }
 
+/** 日付・競馬場・レース番号で検索する。別レースのページは候補に入らない。 */
+export function notionRaceFilter(race: RaceRef): {
+  and: Array<Record<string, unknown>>;
+} {
+  return {
+    and: [
+      { property: "日付", date: { equals: race.date } },
+      { property: "競馬場", select: { equals: race.venue } },
+      { property: "レース", select: { equals: String(race.raceNumber) } },
+    ],
+  };
+}
+
 export function pageMatchesRace(page: unknown, race: RaceRef): boolean {
   if (!page || typeof page !== "object") return false;
   const properties = (page as { properties?: Record<string, unknown> }).properties ?? {};

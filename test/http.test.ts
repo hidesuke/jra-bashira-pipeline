@@ -132,7 +132,7 @@ describe("http", () => {
     expect(await response.text()).toContain("認可が完了");
     const health = await handleRequest(new Request("https://worker.example/health"), http);
     expect(health.status).toBe(200);
-    expect(await health.json()).toEqual({ ok: true, mode: "one-race", commit: null, version_id: null });
+    expect(await health.json()).toEqual({ ok: true, mode: "next-day-batch", commit: null, version_id: null });
   });
 
   it("does not return prompt text or raw KV values from job lookups", async () => {

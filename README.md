@@ -2,7 +2,7 @@
 
 1 レースずつ BASHIRA から出走・成績・オッズを取り、Gemini でコース分析と一次予想を作り、既存の Notion データベース「場立ちのhidesuke JRA予想」に別ページとして書く Cloudflare Worker です。
 
-開発中の動かし方は、手動の `POST /run` で 1 レースだけです。cron の時刻は未定で、定義はコメントアウトしたままです。定義を有効にしても、レースは積みません。
+手動の `POST /run` は 1 レースだけです。金曜と土曜の 16:45（日本時間）に、cron が翌日の全レースを同じ経路で Queue に積みます。予想そのものは Queue が 3 件ずつ進めます。
 
 シークレットの値、プロンプトの本文、Access の Client Secret は、このリポジトリに置きません。
 
@@ -20,7 +20,7 @@
 
 処理の骨格は次のとおりです。
 
-1. Access を通した `POST /run` が、レース 1 件を Queue `jra-bashira-race` に積む。
+1. Access を通した `POST /run` が、レース 1 件を Queue `jra-bashira-race` に積む。金曜・土曜の cron と `POST /admin/batch` も、同じ関数でレースごとに積む。
 2. Consumer がメッセージを 1 件ずつ進める。段階は、出走と馬場の収集、馬ごとの近走、コース集計、Gemini、Notion への書き込みです。
 3. 同じレースを再実行するときは、前の BASHIRA ページをアーカイブし、同じ書式で新しいページを作ります。
 
@@ -129,8 +129,9 @@ npx wrangler secret put NOTIFY_WEBHOOK_KEY
 
 | メソッド | パス | 認証 | 役割 |
 | --- | --- | --- | --- |
-| `GET` | `/health` | なし | 生存確認。`commit` と `version_id` を返す |
+| `GET` | `/health` | なし | 生存確認。`mode` は `next-day-batch`。`commit` と `version_id` も返す |
 | `POST` | `/run` | Access JWT | レース 1 件を積む。受理は 202、処理中は 409 |
+| `POST` | `/admin/batch` | Access JWT | 指定した開催日の全レースを積む。`dry_run: true` は一覧だけで積まない |
 | `GET` | `/oauth/start` | Access JWT | BASHIRA の認可を始める |
 | `GET` | `/oauth/callback` | なし | 認可コードを受け取る。`state` と PKCE で紐づける |
 | `GET` | `/oauth/status` | Access JWT | 認可済みかを返す。トークンは返さない |

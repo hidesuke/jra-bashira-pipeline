@@ -5,7 +5,6 @@ import type { CourseGeminiCall, GeminiCallRecord, GeminiUsageMetadata } from "./
 import { handleInspect } from "./inspect";
 import { pastRunsSnapshotFields } from "./input-sections";
 import { jobRetryView, loadJob } from "./job";
-import { keys } from "./kv";
 import { loadPredictInput } from "./predict-input";
 import {
   applyModelUpdate,
@@ -16,7 +15,10 @@ import {
   restoreModelUpdate,
   saveModelState,
 } from "./models";
-import { acquireLock, type AppConfig } from "./pipeline";
+import { runDateBatch } from "./batch";
+import type { BashiraPort } from "./bashira/port";
+import { enqueueRace } from "./enqueue";
+import type { AppConfig } from "./pipeline";
 import { parseRaceRequest } from "./race-ref";
 import { JobError, errorMessage, type JobMessage, type KvStore } from "./types";
 import type { JWTPayload } from "jose";
@@ -49,6 +51,9 @@ export interface HttpDeps {
   fetch?: typeof fetch;
   verifyJwt(token: string): Promise<JWTPayload>;
   oauth: OAuthPort;
+  /** 開催日バッチが BASHIRA を呼ぶ。無いルートでは使わない。 */
+  bashira?: BashiraPort;
+  log?(event: string, fields?: Record<string, unknown>): void;
   /** Workers の version metadata。tag が空のときは buildCommit を見る。 */
   version?: { id: string; tag: string; timestamp: string } | null;
   /** scripts/write-build-info.mjs が WORKERS_CI_COMMIT_SHA から埋め込んだ SHA。 */
@@ -68,7 +73,7 @@ export async function handleRequest(request: Request, deps: HttpDeps): Promise<R
     if (request.method === "GET" && url.pathname === "/health") {
       return json({
         ok: true,
-        mode: "one-race",
+        mode: "next-day-batch",
         commit: commitOf(deps),
         version_id: deps.version?.id || null,
       });
@@ -114,6 +119,10 @@ export async function handleRequest(request: Request, deps: HttpDeps): Promise<R
       await requireCaller(request, deps);
       return await handleInspect(url, deps.kv);
     }
+    if (url.pathname === "/admin/batch" && request.method === "POST") {
+      const caller = await requireCaller(request, deps);
+      return await postBatch(request, caller, deps);
+    }
     return json({ error: "not found" }, 404);
   } catch (err) {
     if (err instanceof HttpError) return json({ error: err.message }, err.status);
@@ -128,22 +137,44 @@ async function runOne(request: Request, caller: Caller, deps: HttpDeps): Promise
     throw new JobError("JSON オブジェクトでレースを 1 件指定してください", false);
   }
   const race = parseRaceRequest(body);
-  const runId = crypto.randomUUID();
-  const locked = await acquireLock(deps.kv, race.raceKey, runId, caller.name, deps.now());
-  if (!locked) {
+  const remarks = typeof (body as { remarks?: unknown }).remarks === "string" ? (body as { remarks: string }).remarks.trim() : "";
+  const queued = await enqueueRace(deps, { race, requestedBy: caller.name, remarks });
+  if (!queued.enqueued) {
     return json({ error: "このレースは処理中です", race_key: race.raceKey }, 409);
   }
-  try {
-    const remarks = typeof (body as { remarks?: unknown }).remarks === "string" ? (body as { remarks: string }).remarks.trim() : "";
-    await deps.enqueue({ kind: "start", runId, race, requestedBy: caller.name, remarks });
-  } catch (err) {
-    await deps.kv.delete(keys.lock(race.raceKey));
-    throw err;
-  }
   return json(
-    { enqueued: true, race_key: race.raceKey, run_id: runId, requested_by: caller.name },
+    { enqueued: true, race_key: race.raceKey, run_id: queued.runId, requested_by: caller.name },
     202,
   );
+}
+
+async function postBatch(request: Request, caller: Caller, deps: HttpDeps): Promise<Response> {
+  if (!deps.bashira) throw new HttpError(500, "BASHIRA の接続がありません");
+  const body = await readJson(request);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new JobError("JSON オブジェクトで date を指定してください", false);
+  }
+  const record = body as { date?: unknown; dry_run?: unknown };
+  if (typeof record.date !== "string") throw new JobError("date は YYYY-MM-DD です", false);
+  if (record.dry_run != null && typeof record.dry_run !== "boolean") {
+    throw new JobError("dry_run は true または false です", false);
+  }
+  const summary = await runDateBatch(
+    {
+      kv: deps.kv,
+      bashira: deps.bashira,
+      enqueue: deps.enqueue,
+      now: deps.now,
+      log: deps.log,
+    },
+    {
+      date: record.date,
+      source: "admin",
+      dryRun: record.dry_run === true,
+      requestedBy: caller.name,
+    },
+  );
+  return json(summary);
 }
 
 async function getModels(deps: HttpDeps, _caller: Caller): Promise<Response> {

@@ -1,4 +1,4 @@
-/** 開発モードは 1 レース。Free プランの外部サブリクエスト上限は 50。 */
+/** Free プランの外部サブリクエスト上限は 50。並列にしても呼び出しは分かれ、この数は足されない。 */
 export const EXTERNAL_SUBREQUEST_LIMIT = 50;
 /** リダイレクト分の余裕を残し、Worker 側の fetch はここまで。 */
 export const EXTERNAL_BUDGET = 45;
@@ -8,9 +8,17 @@ export const DO_EXTERNAL_BUDGET = 40;
 export const STATS_BATCH_SIZE = 8;
 export const STATS_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 export const MODEL_LIST_TTL_MS = 10 * 60 * 1000;
-export const LOCK_TTL_SECONDS = 15 * 60;
+/**
+ * 同じレースの再投入を拒む時間。
+ * 36 レースを 3 並列で進めると、次のメッセージを待つあいだジョブの更新が止まる。
+ * predict が consumer 上限の 15 分まで伸びると、その待ちは約 3 時間になる。
+ * 15 分のままだと、待ちのあいだの再投入が進行中のジョブを上書きする。
+ */
+export const LOCK_TTL_SECONDS = 4 * 60 * 60;
 /** wrangler.jsonc の queues.consumers.max_retries と同じ。 */
 export const QUEUE_MAX_RETRIES = 3;
+/** wrangler.jsonc の queues.consumers.max_concurrency と同じ。 */
+export const QUEUE_MAX_CONCURRENCY = 3;
 export const BASHIRA_MARKER = "BASHIRAで取得";
 export const DEFAULT_MODEL_NAME = "gemini-flash-latest";
 

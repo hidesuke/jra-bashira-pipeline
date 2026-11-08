@@ -1,6 +1,6 @@
 import { accessJwks, verifyAccessJwt } from "./access";
+import { handleScheduled, type BatchDeps } from "./batch";
 import { BUILD_COMMIT } from "./build-info";
-import { cronSkipReason } from "./cron";
 import { BashiraAuth } from "./bashira/auth-do";
 import { handleRequest, type HttpDeps } from "./http";
 import { notifyConfigFromEnv } from "./notify";
@@ -52,6 +52,24 @@ function httpDeps(env: Env): HttpDeps {
         key: accessJwks(env.ACCESS_TEAM_DOMAIN),
       }),
     oauth: stub,
+    bashira: stub,
+    log: (event, fields) => {
+      console.log(JSON.stringify({ event, ...fields }));
+    },
+  };
+}
+
+function batchDeps(env: Env): BatchDeps {
+  return {
+    kv: env.APP_KV,
+    bashira: env.BASHIRA_AUTH.getByName("bashira"),
+    enqueue: async (message) => {
+      await env.RACE_QUEUE.send(message);
+    },
+    now: () => new Date(),
+    log: (event, fields) => {
+      console.log(JSON.stringify({ event, ...fields }));
+    },
   };
 }
 
@@ -96,8 +114,10 @@ export default {
       else message.ack();
     }
   },
-  async scheduled(): Promise<void> {
-    // cron を後から有効にしても、時刻を決めるまではレースを積まない。
-    console.log(JSON.stringify({ event: "cron_skipped", reason: cronSkipReason() }));
+  async scheduled(controller, env, ctx): Promise<void> {
+    // 予想は Queue が進める。ここでは翌日のレースを積むだけ。
+    const run = handleScheduled(controller, batchDeps(env));
+    ctx.waitUntil(run);
+    await run;
   },
 } satisfies ExportedHandler<Env>;
