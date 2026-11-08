@@ -2,7 +2,7 @@ import { ambiguousNameMessage } from "./bashira/mcp";
 import type { BashiraPort } from "./bashira/port";
 import { selectPastRuns, type FormTask } from "./form";
 import type { CourseSpec } from "./related-courses";
-import { numberField, rowsToObjects, stringField } from "./rows";
+import { comparableMeetingDay, meetingDay, numberField, rowsToObjects, stringField } from "./rows";
 import { assertFields, assertToolArgs, selectColumns, type ToolCatalog } from "./schema";
 import { CODE_BY_VENUE, JobError, type RaceRef } from "./types";
 
@@ -68,7 +68,7 @@ const OPTIONAL_CAREER_COLUMNS = ["is_jockey_change"] as const;
 
 const PACE_COLUMNS = ["race_id", "race_meeting_date", "race_track", "race_number", "first_3f_sec", "last_3f_sec"] as const;
 
-const PAST_RUN_HEADER = [
+export const PAST_RUN_HEADER = [
   "日付",
   "競馬場",
   "レース名",
@@ -253,9 +253,9 @@ export function planPaceQueries(ids: string[]): Record<string, unknown>[] {
   return queries;
 }
 
-/** `2026-10-12` 東京 11R → `20261012-05-11`。場コードが無い競馬場は null。 */
+/** `2026-10-12` または `2026-10-12T00:00:00Z` の東京 11R → `20261012-05-11`。場コードが無い競馬場は null。 */
 export function raceIdOf(row: Record<string, unknown>): string | null {
-  const date = stringField(row, "race_meeting_date");
+  const date = meetingDay(stringField(row, "race_meeting_date"));
   const track = stringField(row, "race_track");
   const number = numberField(row, "race_number");
   if (!date || !track || number == null) return null;
@@ -302,7 +302,7 @@ export function emptyPlaceCounts(): PlaceCounts {
 /** 着順が付いた走だけ数える。取消・除外・中止・失格は入れない。 */
 export function isCountableRun(row: Record<string, unknown>, race: RaceRef): boolean {
   if (stringField(row, "entry_status") === "upcoming") return false;
-  const date = stringField(row, "race_meeting_date");
+  const date = comparableMeetingDay(stringField(row, "race_meeting_date"));
   const track = stringField(row, "race_track");
   const number = numberField(row, "race_number");
   if (date === race.date && track === race.venue && number === race.raceNumber) return false;
@@ -443,8 +443,9 @@ function renderHorsePastRuns(race: RaceRef, horse: CareerHorse, rows: Record<str
 
 function pastRunRow(row: Record<string, unknown>, paces: Map<string, RacePace>): string {
   const pace = paceOf(row, paces);
+  const rawDate = stringField(row, "race_meeting_date");
   const cells = [
-    stringField(row, "race_meeting_date") ?? "",
+    meetingDay(rawDate) ?? rawDate ?? "",
     stringField(row, "race_track") ?? "",
     stringField(row, "race_name_main") ?? "",
     stringField(row, "grade") ?? "",

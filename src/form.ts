@@ -1,5 +1,5 @@
 import { readNameResolutions, type NameCandidate } from "./bashira/mcp";
-import { rowsToObjects, numberField, stringField } from "./rows";
+import { comparableMeetingDay, numberField, rowsToObjects, stringField } from "./rows";
 import { assertFields, assertToolArgs, type ToolCatalog } from "./schema";
 import { DO_EXTERNAL_BUDGET, EXTERNAL_BUDGET, type RaceRef } from "./types";
 
@@ -151,7 +151,7 @@ export function selectPastRuns(
     const name = stringField(row, "horse_name");
     if (name && name !== horseName && name !== resolvedName) return false;
     if (stringField(row, "entry_status") === "upcoming") return false;
-    const date = stringField(row, "race_meeting_date");
+    const date = comparableMeetingDay(stringField(row, "race_meeting_date"));
     const track = stringField(row, "race_track");
     const number = numberField(row, "race_number");
     if (date === race.date && track === race.venue && number === race.raceNumber) return false;
@@ -159,7 +159,9 @@ export function selectPastRuns(
     return true;
   });
   kept.sort((a, b) => {
-    const date = (stringField(b, "race_meeting_date") ?? "").localeCompare(stringField(a, "race_meeting_date") ?? "");
+    const date = (comparableMeetingDay(stringField(b, "race_meeting_date")) ?? "").localeCompare(
+      comparableMeetingDay(stringField(a, "race_meeting_date")) ?? "",
+    );
     if (date !== 0) return date;
     return (numberField(b, "race_number") ?? 0) - (numberField(a, "race_number") ?? 0);
   });

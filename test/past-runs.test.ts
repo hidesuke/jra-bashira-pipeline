@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BashiraPort } from "../src/bashira/port";
 import { pageBlocks, pageMarkdown } from "../src/body";
 import { fillRaceUser, RACE_USER_PLACEHOLDERS } from "../src/dify-input";
+import { selectPastRuns } from "../src/form";
 import {
   careerQuery,
   countPlaces,
@@ -191,6 +192,40 @@ describe("past runs table", () => {
     expect(text).toContain("| 2026-10-12 | 東京 | 前走 | G3 | 3勝クラス | 芝 | 1600 | A | 良 | 16 | 2 | 1:33.2 | 0.2 | 33.8 | 1 | 3-3-2-2 | 騎手A | なし | 56 | 470 | -2 | 3 | 28 | 4 | 6.5 | 34.5 | 35.6 |");
     expect(raceIdOf(row)).toBe("20261012-05-05");
     expect(raceIdOf({ race_meeting_date: "2026-10-12", race_track: "地方", race_number: 1 })).toBeNull();
+    expect(raceIdOf({ race_meeting_date: "2026-10-12T00:00:00Z", race_track: "東京", race_number: 5 })).toBe("20261012-05-05");
+    expect(raceIdOf({ race_meeting_date: "2026-10-12T00:00:00Z", race_track: "海外", race_number: 1 })).toBeNull();
+  });
+
+  it("uses the calendar date when the meeting date includes a time, and still leaves a missing race name blank", () => {
+    const dated = run({ date: "2026-10-12T00:00:00Z", track: "東京", number: 5, surface: "芝", distance: 1600, place: 2 });
+    dated.race_name_main = "前走";
+    const unnamed = run({ date: "2026-09-01T00:00:00Z", track: "東京", number: 3, surface: "芝", distance: 1600, place: 4 });
+    const text = renderPastRuns({
+      race,
+      horses: [horse],
+      rows: [dated, unnamed],
+      paces: new Map([["20261012-05-05", { first3f: 34.5, last3f: 35.6 }]]),
+    });
+    expect(text).toContain("| 2026-10-12 | 東京 | 前走 |");
+    expect(text).toContain("| 34.5 | 35.6 |");
+    expect(text).toContain("| 2026-09-01 | 東京 |  |");
+    expect(text).not.toContain("T00:00:00Z");
+    const current = run({
+      date: "2026-11-08T00:00:00Z",
+      track: "東京",
+      number: 11,
+      surface: "芝",
+      distance: 2500,
+      place: 1,
+      status: "provisional",
+    });
+    const sameDay = run({ date: "2026-11-08T00:00:00Z", track: "東京", number: 3, surface: "芝", distance: 1600, place: 1 });
+    const selected = selectPastRuns([current, dated, sameDay], race, "ア");
+    expect(selected.map((row) => [row.race_meeting_date, row.race_number])).toEqual([
+      ["2026-11-08T00:00:00Z", 3],
+      ["2026-10-12T00:00:00Z", 5],
+    ]);
+    expect(countPlaces([current, dated], race, () => true)).toEqual({ first: 0, second: 1, third: 0, fourth: 0, fifth: 0, other: 0 });
   });
 
   it("plans one get_entries until the row budget, then another, and chunks pace ids by 100", () => {
@@ -246,6 +281,43 @@ describe("past runs table", () => {
     expect(loaded.paceCalls).toBe(1);
     expect(loaded.paces.get("20261012-05-05")).toEqual({ first3f: 34.5, last3f: 35.6 });
     expect(calls.filter((call) => call.name === "get_entries")).toHaveLength(3);
+  });
+
+  it("asks get_races with a race id built from a timestamped meeting date", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const bashira: BashiraPort = {
+      async listTools() {
+        return { ok: true, tools: [] };
+      },
+      async callTool(name, args) {
+        calls.push({ name, ...args });
+        if (name === "get_races") {
+          return { ok: true, data: { rows: [{ race_id: "20261012-05-05", first_3f_sec: 34.5, last_3f_sec: 35.6 }] } };
+        }
+        return {
+          ok: true,
+          data: {
+            rows: [run({ date: "2026-10-12T00:00:00Z", track: "東京", number: 5, surface: "芝", distance: 1600, place: 2 })],
+          },
+        };
+      },
+      async callTools() {
+        return { ok: true, results: [] };
+      },
+    };
+    const loaded = await loadPastPerformance({
+      bashira,
+      catalog: catalogFromTools(bashiraTools),
+      race,
+      horses: [horse],
+    });
+    expect(loaded.paceCalls).toBe(1);
+    expect(calls.find((call) => call.name === "get_races")?.filters).toMatchObject({ race_id: "20261012-05-05" });
+    expect(loaded.paces.get("20261012-05-05")).toEqual({ first3f: 34.5, last3f: 35.6 });
+    const text = renderPastRuns({ race, horses: [horse], rows: loaded.rows, paces: loaded.paces });
+    expect(text).toContain("| 2026-10-12 | 東京 |");
+    expect(text).toContain("| 34.5 | 35.6 |");
+    expect(text).not.toContain("T00:00:00Z");
   });
 });
 

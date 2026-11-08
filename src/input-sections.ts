@@ -7,6 +7,7 @@ import {
   COURSE_SAME_EMPTY,
   COURSE_TRACK_EMPTY,
   PAST_RUN_COLUMN_COUNT,
+  PAST_RUN_HEADER,
   PAST_RUN_NONE,
   PAST_RUN_UNRESOLVED,
   PAST_RUNS_INTRO,
@@ -90,6 +91,38 @@ export function extractRunnerStats(input: string): { text: string } | { reason: 
   return { text: parsed.text };
 }
 
+/** 空欄の意味。0 や未出走とは別。本文には足さない。 */
+export const PAST_RUNS_MISSING_NOTE =
+  "空欄は値なしであり、0や未出走ではない。0と書いてあるセルだけがゼロである。レース名の空欄も同じで、走が無いという意味ではない。";
+
+export interface PastRunsMissing {
+  /** 表のデータ行数。見出しと区切り行は数えない。 */
+  rows: number;
+  /** 列名ごとの空欄件数。27列すべて。0 はその列に空欄が無い。 */
+  blank: Record<string, number>;
+  note: string;
+}
+
+/**
+ * 返した近10走の空欄を数える。本文は変えない。
+ * 表が読めない文字列は行数 0。本文が null のときだけ null。
+ */
+export function describePastRunsMissing(text: string | null): PastRunsMissing | null {
+  if (text == null) return null;
+  const blank: Record<string, number> = {};
+  for (const name of PAST_RUN_HEADER) blank[name] = 0;
+  let rows = 0;
+  for (const line of splitLines(text)) {
+    if (!isDataRow(line)) continue;
+    rows += 1;
+    const cells = line.slice(1, -1).split("|").map((cell) => cell.trim());
+    PAST_RUN_HEADER.forEach((name, index) => {
+      if (cells[index] === "") blank[name] += 1;
+    });
+  }
+  return { rows, blank, note: PAST_RUNS_MISSING_NOTE };
+}
+
 /** include=past_runs のときだけ応答へ足す欄。馬柱とユーザー文は含めない。 */
 export function pastRunsSnapshotFields(stored: PredictInputRecord | null): Record<string, unknown> {
   if (!stored) {
@@ -97,6 +130,7 @@ export function pastRunsSnapshotFields(stored: PredictInputRecord | null): Recor
       input_run_id: null,
       saved_at: null,
       past_runs: null,
+      past_runs_missing: null,
       course_records: null,
       runner_stats: null,
       related_courses: null,
@@ -118,6 +152,7 @@ export function pastRunsSnapshotFields(stored: PredictInputRecord | null): Recor
     input_run_id: stored.runId,
     saved_at: stored.savedAt,
     past_runs: past.text,
+    past_runs_missing: describePastRunsMissing(past.text),
     course_records: course.text,
     runner_stats: runner.text,
     related_courses: related.view,
