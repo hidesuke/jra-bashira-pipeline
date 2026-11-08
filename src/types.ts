@@ -63,11 +63,26 @@ export type JobMessage =
 
 export class JobError extends Error {
   readonly retryable: boolean;
-  constructor(message: string, retryable: boolean) {
+  /** 上流の HTTP ステータス。分かっているときだけ。 */
+  readonly httpStatus: number | null;
+  constructor(message: string, retryable: boolean, httpStatus?: number | null) {
     super(message);
     this.name = "JobError";
     this.retryable = retryable;
+    this.httpStatus = httpStatus ?? null;
   }
+}
+
+export function httpStatusOf(err: unknown): number | null {
+  if (err instanceof JobError && isHttpStatus(err.httpStatus)) return err.httpStatus;
+  const matched = /HTTP (\d{3})\b/.exec(errorMessage(err));
+  if (!matched) return null;
+  const status = Number(matched[1]);
+  return isHttpStatus(status) ? status : null;
+}
+
+function isHttpStatus(status: number | null): status is number {
+  return status != null && Number.isInteger(status) && status >= 100 && status <= 599;
 }
 
 export function isRetryable(err: unknown): boolean {

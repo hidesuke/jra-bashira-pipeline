@@ -38,7 +38,7 @@ npm ci
 
 ローカルの `wrangler dev` は、シークレットを `.dev.vars` から読みます。`.dev.vars.example` をコピーし、値は自分の環境だけに書いてください。`.dev.vars` はコミットしません。
 
-例ファイルにある名前は `GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY`、`ACCESS_AUD` です。`ACCESS_AUD` の値はプレースホルダーです。保護された経路をローカルで試すときは、Access アプリケーションの AUD タグに置き換えてください。`TOKEN_ENCRYPTION_KEY` は `openssl rand -base64 32` で作ります。
+例ファイルにある名前は `GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY`、`ACCESS_AUD` です。`ACCESS_AUD` の値はプレースホルダーです。保護された経路をローカルで試すときは、Access アプリケーションの AUD タグに置き換えてください。`TOKEN_ENCRYPTION_KEY` は `openssl rand -base64 32` で作ります。通知をローカルで試すときだけ、同じファイルの `NOTIFY_WEBHOOK_URL` と `NOTIFY_WEBHOOK_KEY` に自分の値を書きます。空なら通知しません。
 
 本番のシークレットは、最初のデプロイで Worker ができてから入れます。手順は次の節と [docs/operations.md](docs/operations.md) です。
 
@@ -109,6 +109,19 @@ npx wrangler secret put ACCESS_AUD
 ```
 
 入れる名前は `GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY`、`ACCESS_AUD` です。レースを動かす前に 4 つが必要です。入っていないと実行時に失敗します。`secrets.required` は設定していません。Worker がまだ無い状態では、シークレットを先に置けないためです。
+
+レースが最終失敗したときの通知は任意です。`NOTIFY_WEBHOOK_URL` が未設定、または空白のときは何も送りません。URL とキーは Secret です。値はリポジトリ、ログ、コマンド引数に書きません。
+
+```bash
+npx wrangler secret put NOTIFY_WEBHOOK_URL
+npx wrangler secret put NOTIFY_WEBHOOK_KEY
+```
+
+`secret put` はそれ自体がデプロイです。通知が要らないときは、この 2 つを置かないでください。ダッシュボードの Settings → Variables and Secrets から Secret として入れても同じです。
+
+キーを載せるヘッダー名は、平文の変数 `NOTIFY_WEBHOOK_KEY_HEADER` です。未設定なら `Authorization` で、値は `Bearer <NOTIFY_WEBHOOK_KEY>` です。`Authorization` 以外の名前（大文字小文字は区別しません）をセットしたときは、`Bearer` を付けず、キーをそのヘッダーへそのまま入れます。`Content-Type` と `Content-Length` はキーのヘッダーには使わず、本文は JSON のまま送ります。キーが空なら認証ヘッダーは付けません。この変数は `wrangler.jsonc` には入れていません。既定はコード側です。別の名前をデプロイのあとも残すときは、`vars` に `NOTIFY_WEBHOOK_KEY_HEADER` を書いてください。ダッシュボードだけに置いた平文変数は、次の `wrangler deploy` で消えることがあります。
+
+送るのは、再試行を終えてジョブの `phase` を `error` にしたときだけです。本文は JSON で、`type` は `race_failed` です。中身は [docs/pipeline.md](docs/pipeline.md) です。通知の失敗でレースジョブは失敗させず、再試行もしません。
 
 `/health` の `commit` の決まり方と、プルリクエストのプレビューは [docs/operations.md](docs/operations.md) にあります。プレビュー確認は通ります。本番の KV、Queue、cron、シークレットはプレビューに渡しません。`BABA` は本番の `jra-dify-pipeline` を読みます。
 

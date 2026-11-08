@@ -11,11 +11,20 @@
 - `TOKEN_ENCRYPTION_KEY`（`openssl rand -base64 32`）
 - `ACCESS_AUD`（Access アプリケーションの AUD タグ。`vars` には書かない）
 
+次は任意の Secret です。未設定なら通知しません。値をリポジトリ、コマンド引数、ログに書かないでください。
+
+- `NOTIFY_WEBHOOK_URL`
+- `NOTIFY_WEBHOOK_KEY`
+
+入れ方は必須の Secret と同じです。ダッシュボードの Settings → Variables and Secrets か、`npx wrangler secret put NOTIFY_WEBHOOK_URL` と `npx wrangler secret put NOTIFY_WEBHOOK_KEY` です。`secret put` はデプロイになります。通知が要らないときは置かないでください。
+
+`NOTIFY_WEBHOOK_KEY_HEADER` は Secret ではなく平文の変数です。未設定なら `Authorization` で、値は `Bearer <NOTIFY_WEBHOOK_KEY>` です。それ以外のヘッダー名なら、キーをそのままそのヘッダーに入れます。`wrangler.jsonc` には書いていません。別の名前を残すときは `vars` に足してください。
+
 Worker がまだ無い状態では `wrangler secret put` もダッシュボードもシークレットを先に置けないため、`secrets.required` は設定していません。最初の deploy が Worker を作ったあと、ダッシュボードの Settings → Variables and Secrets か、README の `secret put` で入れます。
 
 `secret put` はそれ自体がデプロイになります。レースを動かす前に入れてください。入っていないと実行時に失敗します。`ACCESS_AUD` はダッシュボードで設定済みなら、その値を上書きしないでください。
 
-ローカルの `wrangler dev` では同じ名前を `.dev.vars` に書きます。`.dev.vars.example` をコピーしてください。例ファイルにあるのは `GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY`、`ACCESS_AUD` です。`ACCESS_AUD` の値はプレースホルダーなので、保護された経路を試すときは自分の AUD タグに置き換えます。`.dev.vars` はコミットしません。
+ローカルの `wrangler dev` では同じ名前を `.dev.vars` に書きます。`.dev.vars.example` をコピーしてください。例ファイルにあるのは `GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY`、`ACCESS_AUD` です。通知を試すときだけ `NOTIFY_WEBHOOK_URL` と `NOTIFY_WEBHOOK_KEY` も書きます。空なら送りません。`ACCESS_AUD` の値はプレースホルダーなので、保護された経路を試すときは自分の AUD タグに置き換えます。`.dev.vars` はコミットしません。
 
 `ACCESS_CLIENT_ID_GROK` と `ACCESS_CLIENT_ID_MUSE` は Secret ではなく `vars` です。リポジトリ上の値は空です。Client Secret は Worker に置きません。
 
@@ -43,7 +52,7 @@ Workers Builds のプルリクエスト用プレビュー確認は通ります�
 - 本番の KV。`APP_KV` の binding は `previews` に無い。
 - 本番の Queue。`jra-bashira-race` の producer も consumer も `previews` に無い。
 - cron。`previews` に `triggers` は無い。プレビューの `scheduled` は動かない。
-- シークレット。`GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY`、`ACCESS_AUD` は `previews` に無い。
+- シークレット。`GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY`、`ACCESS_AUD` は `previews` に無い。任意の `NOTIFY_WEBHOOK_URL` と `NOTIFY_WEBHOOK_KEY` も無い。
 
 `NOTION_DATABASE_ID` はプレビューでは空です。本番のデータベース ID は置きません。
 
