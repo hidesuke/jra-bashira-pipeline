@@ -135,7 +135,7 @@ npx wrangler secret put NOTIFY_WEBHOOK_KEY
 | `GET` | `/oauth/callback` | なし | 認可コードを受け取る。`state` と PKCE で紐づける |
 | `GET` | `/oauth/status` | Access JWT | 認可済みかを返す。トークンは返さない |
 | `GET` | `/admin/jobs` | Access JWT | ジョブの進捗と失敗理由。Gemini の `finishReason`、`modelVersion`、トークン数。コース分析は検索クエリも |
-| `GET` | `/admin/jobs/input` | Access JWT | 予想に渡した馬柱と、馬ごとの解決結果 |
+| `GET` | `/admin/jobs/input` | Access JWT | 予想に渡した馬柱と、馬ごとの解決結果。`include=past_runs` は近10走とコース成績だけ |
 | `GET` | `/admin/inspect` | Access JWT | レースの馬柱、LLM の入出力、呼び出し結果。`format=markdown` は人が読む形。`date` はその日の一覧 |
 | `GET` | `/admin/models` | Access JWT | Gemini モデルの一覧と現在値 |
 | `PUT` | `/admin/models` | Access JWT | コース分析またはレース予想のモデルを変える |
