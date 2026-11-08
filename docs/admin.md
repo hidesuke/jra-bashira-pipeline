@@ -10,7 +10,7 @@ curl -sS "https://<worker>/admin/jobs?race_key=20261107-03-11" \
   -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET"
 ```
 
-`race_key` が無いときは 400、ジョブが無いときは 404 です。応答には `race_key`、`run_id`、`phase`、`error`、`requested_by`、`notion_page_id`、`course_variant`、`gemini`、`odds` と、コースデータ要約の欄が入ります。`phase` が `error` のとき `error` に理由が入ります。refresh の失敗もここに出ます。`course_variant` は常に null です。理由は [course-odds.md](course-odds.md) です。プロンプト本文、コース分析の本文、予想本文、検索の引用は返しません。
+`race_key` が無いときは 400、ジョブが無いときは 404 です。応答には `race_key`、`run_id`、`phase`、`error`、`retry`、`attempt`、`max_attempts`、`last_error`、`requested_by`、`notion_page_id`、`course_variant`、`gemini`、`odds` と、コースデータ要約の欄が入ります。`phase` が `error` のとき `error` に理由が入ります。refresh の失敗もここに出ます。再試行を待っているときは `phase` はその段階のままで、`retry` が `retrying attempt 2/3` のようになります。`attempt` と `max_attempts` はその数字、`last_error` は直前の失敗理由です。再試行中でなければこの 4 つは null です。`error` は最終失敗まで null です。`course_variant` は常に null です。理由は [course-odds.md](course-odds.md) です。プロンプト本文、コース分析の本文、予想本文、検索の引用は返しません。
 
 コースデータ要約は、予想の前に計算したものです。プロンプトの本文は返しません。
 
