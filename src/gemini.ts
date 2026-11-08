@@ -13,13 +13,42 @@ const RACE_RESPONSE_SCHEMA = {
   required: ["指数分布", "自信度", "波乱度", "印", "予想本文"],
 };
 
+/** ジョブに残すトークン数。無い項目は null。思考トークンは thoughtsTokenCount。 */
+export interface GeminiUsageMetadata {
+  promptTokenCount: number | null;
+  candidatesTokenCount: number | null;
+  thoughtsTokenCount: number | null;
+  totalTokenCount: number | null;
+}
+
+/** 1 回の generateContent からジョブへ残す項目。引用本文は持たない。 */
+export interface GeminiCallRecord {
+  finishReason: string | null;
+  modelVersion: string | null;
+  usageMetadata: GeminiUsageMetadata;
+}
+
+/** コース分析だけ。groundingMetadata.webSearchQueries の件数と文字列。 */
+export interface CourseGeminiCall extends GeminiCallRecord {
+  webSearchQueryCount: number;
+  webSearchQueries: string[];
+}
+
+export interface GoogleSearchTool {
+  googleSearch: Record<string, never>;
+}
+
 export interface GeminiText {
   text: string;
   modelVersion: string | null;
   requestedModel: string;
+  finishReason: string | null;
+  usageMetadata: GeminiUsageMetadata;
+  /** 応答の webSearchQueries。レース予想ではジョブに残さない。本文には混ぜない。 */
+  webSearchQueries: string[];
 }
 
-export async function generateText(input: {
+interface GenerateTextInput {
   apiKey: string;
   model: string;
   /** Gemini の systemInstruction。Dify の system メッセージ。 */
@@ -28,8 +57,35 @@ export async function generateText(input: {
   prompt: string;
   budget: ExternalBudget;
   json?: boolean;
+  /** コース分析だけ渡す。レース予想は省略する。 */
+  tools?: GoogleSearchTool[];
   fetcher?: typeof fetch;
-}): Promise<GeminiText> {
+}
+
+interface GeminiPart {
+  text?: unknown;
+  thought?: unknown;
+}
+
+interface GeminiCandidate {
+  finishReason?: unknown;
+  content?: { parts?: GeminiPart[] };
+  groundingMetadata?: { webSearchQueries?: unknown };
+}
+
+interface GeminiPayload {
+  modelVersion?: unknown;
+  error?: { message?: string };
+  usageMetadata?: {
+    promptTokenCount?: unknown;
+    candidatesTokenCount?: unknown;
+    thoughtsTokenCount?: unknown;
+    totalTokenCount?: unknown;
+  };
+  candidates?: GeminiCandidate[];
+}
+
+export async function generateText(input: GenerateTextInput): Promise<GeminiText> {
   assertModelId(input.model);
   try {
     return await callGemini(input, Boolean(input.json));
@@ -39,22 +95,42 @@ export async function generateText(input: {
   }
 }
 
-async function callGemini(
-  input: { apiKey: string; model: string; system?: string; prompt: string; budget: ExternalBudget; fetcher?: typeof fetch },
-  json: boolean,
-): Promise<GeminiText> {
+export function courseCallRecord(result: GeminiText): CourseGeminiCall {
+  return {
+    finishReason: result.finishReason,
+    modelVersion: result.modelVersion,
+    usageMetadata: result.usageMetadata,
+    webSearchQueryCount: result.webSearchQueries.length,
+    webSearchQueries: result.webSearchQueries,
+  };
+}
+
+export function raceCallRecord(result: GeminiText): GeminiCallRecord {
+  return {
+    finishReason: result.finishReason,
+    modelVersion: result.modelVersion,
+    usageMetadata: result.usageMetadata,
+  };
+}
+
+async function callGemini(input: GenerateTextInput, json: boolean): Promise<GeminiText> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:generateContent`;
+  const generationConfig: Record<string, unknown> = {
+    thinkingConfig: { thinkingLevel: "high" },
+  };
+  if (json) {
+    generationConfig.responseMimeType = "application/json";
+    generationConfig.responseSchema = RACE_RESPONSE_SCHEMA;
+  }
   const body: Record<string, unknown> = {
     contents: [{ role: "user", parts: [{ text: input.prompt }] }],
+    generationConfig,
   };
   if (input.system?.trim()) {
     body.systemInstruction = { parts: [{ text: input.system }] };
   }
-  if (json) {
-    body.generationConfig = {
-      responseMimeType: "application/json",
-      responseSchema: RACE_RESPONSE_SCHEMA,
-    };
+  if (input.tools && input.tools.length > 0) {
+    body.tools = input.tools;
   }
   const response = await budgetedFetch(
     input.budget,
@@ -69,11 +145,7 @@ async function callGemini(
     },
     input.fetcher,
   );
-  const payload = (await response.json().catch(() => ({}))) as {
-    modelVersion?: unknown;
-    error?: { message?: string };
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
+  const payload = (await response.json().catch(() => ({}))) as GeminiPayload;
   if (!response.ok) {
     const message = payload.error?.message ?? `HTTP ${response.status}`;
     throw new JobError(
@@ -81,13 +153,48 @@ async function callGemini(
       response.status === 429 || response.status >= 500,
     );
   }
-  const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
+  const candidate = payload.candidates?.[0];
+  const text = responseText(candidate?.content?.parts);
   if (!text.trim()) throw new JobError(`Gemini (${input.model}) の応答テキストが空です`, true);
+  const modelVersion = typeof payload.modelVersion === "string" ? payload.modelVersion : null;
   return {
     text,
-    modelVersion: typeof payload.modelVersion === "string" ? payload.modelVersion : null,
+    modelVersion,
     requestedModel: input.model,
+    finishReason: typeof candidate?.finishReason === "string" ? candidate.finishReason : null,
+    usageMetadata: readUsage(payload.usageMetadata),
+    webSearchQueries: readWebSearchQueries(candidate),
   };
+}
+
+/** part.thought が true の思考文は連結しない。引用メタデータはここには無い。 */
+function responseText(parts: GeminiPart[] | undefined): string {
+  if (!parts) return "";
+  let text = "";
+  for (const part of parts) {
+    if (part.thought === true) continue;
+    if (typeof part.text === "string") text += part.text;
+  }
+  return text;
+}
+
+function readUsage(raw: GeminiPayload["usageMetadata"]): GeminiUsageMetadata {
+  return {
+    promptTokenCount: tokenCount(raw?.promptTokenCount),
+    candidatesTokenCount: tokenCount(raw?.candidatesTokenCount),
+    thoughtsTokenCount: tokenCount(raw?.thoughtsTokenCount),
+    totalTokenCount: tokenCount(raw?.totalTokenCount),
+  };
+}
+
+function tokenCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readWebSearchQueries(candidate: GeminiCandidate | undefined): string[] {
+  const raw = candidate?.groundingMetadata?.webSearchQueries;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((item): item is string => typeof item === "string");
 }
 
 export interface RacePredictionFields {

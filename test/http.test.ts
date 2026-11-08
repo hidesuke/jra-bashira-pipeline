@@ -154,6 +154,30 @@ describe("http", () => {
         courseVariant: null,
         odds: null,
         prediction: { courseText: secret, 予想本文: secret },
+        gemini: {
+          course: {
+            finishReason: "STOP",
+            modelVersion: "mv-course",
+            usageMetadata: {
+              promptTokenCount: 1,
+              candidatesTokenCount: 2,
+              thoughtsTokenCount: 3,
+              totalTokenCount: 6,
+            },
+            webSearchQueryCount: 1,
+            webSearchQueries: ["福島 芝 1600"],
+          },
+          race: {
+            finishReason: "MAX_TOKENS",
+            modelVersion: "mv-race",
+            usageMetadata: {
+              promptTokenCount: 4,
+              candidatesTokenCount: 5,
+              thoughtsTokenCount: 6,
+              totalTokenCount: 15,
+            },
+          },
+        },
       }),
     );
     const job = await handleRequest(authed("/admin/jobs?race_key=20261107-03-11"), http);
@@ -162,6 +186,25 @@ describe("http", () => {
     expect(body).not.toContain(secret);
     expect(body).not.toContain("courseText");
     expect(body).toContain("prompt:v2:course");
+    const listed = JSON.parse(body) as {
+      gemini: {
+        course: { finishReason: string; webSearchQueryCount: number; webSearchQueries: string[]; usageMetadata: { thoughtsTokenCount: number } };
+        race: { finishReason: string; webSearchQueries?: string[] };
+      };
+    };
+    expect(listed.gemini.course).toMatchObject({
+      finishReason: "STOP",
+      modelVersion: "mv-course",
+      webSearchQueryCount: 1,
+      webSearchQueries: ["福島 芝 1600"],
+      usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 2, thoughtsTokenCount: 3, totalTokenCount: 6 },
+    });
+    expect(listed.gemini.race).toEqual({
+      finishReason: "MAX_TOKENS",
+      modelVersion: "mv-race",
+      usageMetadata: { promptTokenCount: 4, candidatesTokenCount: 5, thoughtsTokenCount: 6, totalTokenCount: 15 },
+    });
+    expect(listed.gemini.race.webSearchQueries).toBeUndefined();
   });
 
   it("returns stored predict input only behind Access", async () => {

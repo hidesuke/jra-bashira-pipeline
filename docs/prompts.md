@@ -8,6 +8,18 @@
 
 Gemini は `system` を `systemInstruction`、`user` を `contents` の user メッセージに分けます。レース予想の応答は Markdown として読み、見出しから指数分布・自信度・波乱度・印を取ります。見出しが足りないときだけ、本文中の JSON を試します。取り方は [notion.md](notion.md) です。
 
+## Gemini への渡し方
+
+コース分析とレース予想の両方に、`generationConfig.thinkingConfig.thinkingLevel` を `high` と付けます。`includeThoughts` は付けません。`temperature` や `maxOutputTokens` など、思考レベル以外の `generationConfig` は付けません。思考レベルを上げると思考トークンが増え、`predict` の Queue consumer が 15 分の上限に当たりやすくなります。詳細は [pipeline.md](pipeline.md) です。
+
+コース分析（`prompt:v2:course`）だけ、`tools` に `{ "googleSearch": {} }` を付けます。レース予想には付けません。
+
+応答の `parts` のうち `thought` が true の部分は本文に連結しません。`groundingMetadata` の引用は本文に混ぜません。Notion の書式は変えません。
+
+呼び出しごとに、ジョブ `job:v1:{raceKey}` の `gemini.course` または `gemini.race` へ残します。項目は `finishReason`、`modelVersion`、`usageMetadata`（`promptTokenCount`、`candidatesTokenCount`、`thoughtsTokenCount`、`totalTokenCount`）です。コース分析は加えて `webSearchQueryCount` と `webSearchQueries`（`groundingMetadata.webSearchQueries` の文字列）です。確認は [admin.md](admin.md) の `GET /admin/jobs` です。コース分析の記録は、レース予想が失敗しても残します。
+
+Google 検索の料金は、使うモデルに依存します。3.8 Flash では月 5,000 クエリまで無料で、それを超えると 1,000 クエリあたり 14 ドルです。1 回のコース分析が複数クエリを使うことがあり、失敗後の再試行は同じコース分析をもう一度呼びます。思考トークンは出力として課金されるため、`high` は 1 呼び出しあたりの出力料金を増やします。モデル名はこの Worker では固定せず、KV `config:models` か `DEFAULT_MODEL` です。
+
 user 文の差し込みは次の名前です。置換したあとに `{{` が残っていると（`{{name}}` も `{{#…#}}` も）ジョブは失敗します。KV を新しい名前へ替えるまでのあいだ、右の Dify ノード ID にも同じ値を入れます。天気の Dify トークンは、DSL の綴り `weathre` のままです。
 
 コース集計（`get_stats`）の結果は、どちらの user 文にも入れません。

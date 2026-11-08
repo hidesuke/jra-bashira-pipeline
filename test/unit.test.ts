@@ -16,7 +16,7 @@ import {
 } from "../src/dify-input";
 import { extractRaceMarkdown } from "../src/extract-prediction";
 import { PAST_RUN_LIMIT, selectPastRuns } from "../src/form";
-import { parseRacePrediction } from "../src/gemini";
+import { generateText, parseRacePrediction } from "../src/gemini";
 import { formatJst } from "../src/jst";
 import { keys, MemoryKv } from "../src/kv";
 import { loadPrompt } from "../src/prompts";
@@ -737,6 +737,141 @@ describe("gemini json", () => {
     expect(parseRacePrediction('```json\n{"指数分布":"1強","自信度":"A","波乱度":"堅実","印":"◎1","予想本文":"行く"}\n```')).toMatchObject({
       自信度: "A",
     });
+  });
+
+  it("sends high thinking, optional search tools, and drops thought parts", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const result = await generateText({
+      apiKey: "k",
+      model: "gemini-flash-latest",
+      system: "sys",
+      prompt: "user",
+      budget: new ExternalBudget(),
+      tools: [{ googleSearch: {} }],
+      fetcher: async (_input, init) => {
+        seen.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return Response.json({
+          modelVersion: "gemini-3.8-flash-001",
+          usageMetadata: {
+            promptTokenCount: 11,
+            candidatesTokenCount: 22,
+            thoughtsTokenCount: 33,
+            totalTokenCount: 66,
+            cachedContentTokenCount: 9,
+          },
+          candidates: [
+            {
+              finishReason: "STOP",
+              groundingMetadata: {
+                webSearchQueries: ["東京 芝 1600", 3, "福島"],
+                groundingChunks: [{ web: { title: "cite-me" } }],
+              },
+              content: {
+                parts: [
+                  { text: "考えたことSECRET", thought: true },
+                  { text: "本文です" },
+                  { thought: true },
+                  { text: "続き" },
+                ],
+              },
+            },
+          ],
+        });
+      },
+    });
+    expect(seen[0]?.tools).toEqual([{ googleSearch: {} }]);
+    expect(seen[0]?.generationConfig).toEqual({ thinkingConfig: { thinkingLevel: "high" } });
+    const sent = JSON.stringify(seen[0]);
+    expect(sent).not.toContain("includeThoughts");
+    expect(sent).not.toContain("temperature");
+    expect(sent).not.toContain("maxOutputTokens");
+    expect(result.text).toBe("本文です続き");
+    expect(result.text).not.toContain("SECRET");
+    expect(result.text).not.toContain("cite-me");
+    expect(result).toMatchObject({
+      modelVersion: "gemini-3.8-flash-001",
+      finishReason: "STOP",
+      usageMetadata: {
+        promptTokenCount: 11,
+        candidatesTokenCount: 22,
+        thoughtsTokenCount: 33,
+        totalTokenCount: 66,
+      },
+      webSearchQueries: ["東京 芝 1600", "福島"],
+    });
+  });
+
+  it("omits tools when the caller does not pass them", async () => {
+    let body: Record<string, unknown> = {};
+    const result = await generateText({
+      apiKey: "k",
+      model: "gemini-flash-latest",
+      prompt: "user",
+      budget: new ExternalBudget(),
+      fetcher: async (_input, init) => {
+        body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return Response.json({
+          candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [{ text: "本文" }] } }],
+        });
+      },
+    });
+    expect(body.tools).toBeUndefined();
+    expect(body.generationConfig).toEqual({ thinkingConfig: { thinkingLevel: "high" } });
+    expect(result.finishReason).toBe("MAX_TOKENS");
+    expect(result.modelVersion).toBeNull();
+    expect(result.usageMetadata).toEqual({
+      promptTokenCount: null,
+      candidatesTokenCount: null,
+      thoughtsTokenCount: null,
+      totalTokenCount: null,
+    });
+    expect(result.webSearchQueries).toEqual([]);
+  });
+
+  it("rejects a response that is only thought text", async () => {
+    await expect(
+      generateText({
+        apiKey: "k",
+        model: "gemini-flash-latest",
+        prompt: "user",
+        budget: new ExternalBudget(),
+        fetcher: async () =>
+          Response.json({
+            candidates: [{ content: { parts: [{ text: "考えただけ", thought: true }] } }],
+          }),
+      }),
+    ).rejects.toThrow(/応答テキストが空です/);
+  });
+
+  it("keeps thinking level on the json fallback and does not add other generationConfig", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    await generateText({
+      apiKey: "k",
+      model: "gemini-flash-latest",
+      prompt: "user",
+      json: true,
+      tools: [{ googleSearch: {} }],
+      budget: new ExternalBudget(),
+      fetcher: async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        bodies.push(body);
+        if (bodies.length === 1) return Response.json({ error: { message: "bad schema" } }, { status: 400 });
+        return Response.json({
+          candidates: [{ finishReason: "STOP", content: { parts: [{ text: "{\"指数分布\":\"x\"}" }] } }],
+        });
+      },
+    });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]?.generationConfig).toMatchObject({
+      thinkingConfig: { thinkingLevel: "high" },
+      responseMimeType: "application/json",
+    });
+    expect(bodies[0]?.generationConfig).not.toHaveProperty("temperature");
+    expect(bodies[0]?.generationConfig).not.toHaveProperty("maxOutputTokens");
+    expect(JSON.stringify(bodies[0]?.generationConfig)).not.toContain("includeThoughts");
+    expect(bodies[1]?.generationConfig).toEqual({ thinkingConfig: { thinkingLevel: "high" } });
+    expect(bodies[0]?.tools).toEqual([{ googleSearch: {} }]);
+    expect(bodies[1]?.tools).toEqual([{ googleSearch: {} }]);
   });
 });
 
