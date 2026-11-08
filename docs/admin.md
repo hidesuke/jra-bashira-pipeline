@@ -14,9 +14,9 @@ curl -sS -X POST "https://<worker>/admin/batch" \
   -d '{"date":"2026-11-09","dry_run":true}'
 ```
 
-`date` は `YYYY-MM-DD` で必須です。`dry_run` が `true` のときは列挙するだけで、Queue にもロックにも KV の要約にも書きません。省略か `false` のときは積みます。中止（`canceled`）と、処理中・完了済みは `skipped` です。失敗済みはもう一度積みます。
+`date` は `YYYY-MM-DD` で必須です。ハイフンの無い `YYYYMMDD` は 400 です。`dry_run` が `true` のときは列挙し、既存のジョブを読んで飛ばすかを決めます。Queue にもロックにも KV の要約にも書きません。省略か `false` のときは積みます。中止（`canceled`）、重複、処理中、完了済みは `skipped` です。失敗済みはもう一度積みます。`race_status` が無い行や、レースを解釈できない行は `failed` です。
 
-応答の件数は `enqueued`、`would_enqueue`、`skipped`、`failed` です。レースごとの `action` は `enqueued`、`would_enqueue`、`skipped`、`failed` です。`dry_run` でないときだけ、同じ内容を KV `batch:v1:{date}` に 1 件書きます。プロンプト本文は入れません。
+列挙できたときの応答は 200 です。件数は `enqueued`、`would_enqueue`、`skipped`、`failed` です。ほかに `date`、`source`（この入口は `admin`。cron は `cron`）、`dry_run`、`scheduled_time`（この入口は null。cron は発火時刻）、`listed_by`（1 回で取り切れたときは `day`、開催場に分けたときは `venue`）、`races` が入ります。`races` の 1 件は `race_key`、`race_id`、`venue`、`race_number`、`action`、`reason`、`run_id` です。`action` は `enqueued`、`would_enqueue`、`skipped`、`failed` です。飛ばす理由も失敗理由も無いときは `reason` は null です。積んだときだけ `run_id` が入ります。`dry_run` でないときだけ、同じ内容を KV `batch:v1:{date}` に 1 件書き、14 日で消します。書き込みに失敗しても応答は返し、ログ `batch_summary_failed` に理由を残します。プロンプト本文は入れません。
 
 0 件の日は 200 で件数 0 です。`get_races` を開催場に分けてもまだ打ち切れているときは 400 で、その日は積みません。進め方は [pipeline.md](pipeline.md) です。
 

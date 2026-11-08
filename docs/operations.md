@@ -30,7 +30,7 @@ Worker がまだ無い状態では `wrangler secret put` もダッシュボー�
 
 ## ビルドと `/health` の commit
 
-`/health` は `ok`、`mode`（`next-day-batch`）、`version`（`package.json` の version。コードでは `APP_VERSION`）、`commit`、`version_id` を返します。`commit` は、空でなければ `CF_VERSION_METADATA.tag` です。Workers Builds ではこの tag が空になることがあります。そのときはビルド時に `src/build-info.ts` へ書いた SHA を使います。両方空なら `commit` は null です。
+`/health` は `ok`、`mode`（`next-day-batch`）、`version`、`commit`、`version_id` を返します。`version` は `package.json` の version で、コードの `APP_VERSION`（`src/version.ts`）と同じです。いまの値は `0.9.0` です。`commit` は、空でなければ `CF_VERSION_METADATA.tag` です。Workers Builds ではこの tag が空になることがあります。そのときはビルド時に `src/build-info.ts` へ書いた SHA を使います。両方空なら `commit` は null です。
 
 SHA を書くのは `scripts/write-build-info.mjs` です。次のときだけファイルを書き換えます。
 
@@ -72,6 +72,22 @@ npx wrangler queues create jra-bashira-race-dlq
 
 無い状態で deploy すると失敗します。配送が待ち行列へ入る条件は [pipeline.md](pipeline.md) です。
 
+## Free プランの上限
+
+コードが件数で止めているのは、1 呼び出しの外部 `fetch` です。日次の枠はプラットフォームが適用し、超えるとその操作が失敗します。出典は [Workers のサブリクエスト上限](https://developers.cloudflare.com/workers/platform/limits/#subrequests)、[KV の上限](https://developers.cloudflare.com/kv/platform/limits/)、[Queues の料金](https://developers.cloudflare.com/queues/platform/pricing/) です。
+
+| 上限 | Free プラン | このリポジトリ |
+| --- | --- | --- |
+| 外部サブリクエスト | 1 呼び出し 50 件 | `EXTERNAL_SUBREQUEST_LIMIT`。Worker は `EXTERNAL_BUDGET` の 45 件で分割する。通知の 1 件だけ、45 を使い切っていても 50 未満なら送る |
+| Cloudflare サービスへのサブリクエスト | 1 呼び出し 1,000 件 | KV、Queue、Durable Object のバインディング。この 1,000 は定数にしていない。外部 `fetch` の 45 件・40 件には数えない |
+| KV の書き込み | 別のキーへ 1 日 1,000。同じキーは 1 秒に 1 回 | ジョブは `JOB_WRITE_MIN_INTERVAL_MS`（1.1 秒）で間を空ける。429 は `KV_PUT_BACKOFF_MS`（1 秒、2 秒、4 秒）で待ってやり直す |
+| Queue の操作 | 1 日 10,000。64KB までの書き込み、読み取り、削除がそれぞれ 1 操作。1 メッセージの配送は、通常この 3 操作 | `max_batch_size` は 1。`max_concurrency` は 3。メッセージの保持は 24 時間で、Free プランでは変えられない。待ち行列 `jra-bashira-race-dlq` も Queue なので、同じ保持になる |
+| Durable Object の外部 `fetch` | 外部サブリクエストと同じく 1 回 50 件 | `DO_EXTERNAL_BUDGET` の 40 件で止める。40 は 1 回の呼び出しの予算で、1 日の合計ではない |
+
+Gemini の日次の呼び出し上限は、このリポジトリの定数にはありません。予想 1 件の `predict` は `streamGenerateContent` を 2 回（コース分析とレース予想）呼びます。
+
+開催日の全レースを 3 並列で進めたとき、KV の 1 日の書き込み、Gemini の呼び出し、各呼び出しの Durable Object 40 件に収まるかは、まだ本番で見ていません。記録は [verification.md](verification.md) です。
+
 ## テスト
 
 ```bash
@@ -86,4 +102,6 @@ BASHIRA、Gemini、Notion はモックです。実 API へのデプロイや書�
 
 金曜と土曜の 16:45（日本時間）に、翌日の全レースを積みます。`wrangler.jsonc` の式は `45 7 * * FRI,SAT` です。Cloudflare の cron は UTC で、曜日の 1 は日曜なので金・土は `FRI,SAT` です。7:45 UTC は 16:45 JST で、日付は変わりません。積む開催日は、発火した瞬間の日本時間の翌日です。
 
-`scheduled` は予想の完了を待ちません。0 件の日はログして戻ります。処理中と完了済みのレースは積みません。失敗済みはもう一度積みます。件数はログと KV `batch:v1:{開催日}` の 1 件に残します。プレビューには cron を置いていないので、プレビューの `scheduled` は動きません。進み方とロックは [pipeline.md](pipeline.md)、手動の再実行は [admin.md](admin.md) です。
+`scheduled` は予想の完了を待ちません。0 件の日はログして戻ります。処理中と完了済みのレースは積みません。失敗済みはもう一度積みます。件数はログと KV `batch:v1:{開催日}` の 1 件に残し、14 日で消します。プレビューには cron を置いていないので、プレビューの `scheduled` は動きません。進み方とロックは [pipeline.md](pipeline.md)、手動の再実行は [admin.md](admin.md) です。
+
+本番で、この cron が翌日の全レースを 3 並列で最後まで進めた記録は、まだありません。初回は 2026-11-13 16:45（日本時間）の予定です。見方は [verification.md](verification.md) です。
