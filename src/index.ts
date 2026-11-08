@@ -114,10 +114,8 @@ export default {
       else message.ack();
     }
   },
-  async scheduled(controller, env, ctx): Promise<void> {
+  async scheduled(controller, env): Promise<void> {
     // 予想は Queue が進める。ここでは翌日のレースを積むだけ。
-    const run = handleScheduled(controller, batchDeps(env));
-    ctx.waitUntil(run);
-    await run;
+    await handleScheduled(controller, batchDeps(env));
   },
 } satisfies ExportedHandler<Env>;

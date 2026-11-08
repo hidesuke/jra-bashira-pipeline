@@ -98,6 +98,8 @@ npm run check
 
 BASHIRA、Gemini、Notion はモックです。実 API へのデプロイや書き込みは、テストではしません。型生成は `npm run types`（`wrangler types`）です。
 
+同じ `npm ci` と `npm run check` を、GitHub Actions（[`.github/workflows/check.yml`](../.github/workflows/check.yml)）が pull request と `main` への push で実行します。シークレットは使わず、デプロイはしません。デプロイは Workers Builds のままです。
+
 ## cron
 
 金曜と土曜の 16:45（日本時間）に、翌日の全レースを積みます。`wrangler.jsonc` の式は `45 7 * * FRI,SAT` です。Cloudflare の cron は UTC で、曜日の 1 は日曜なので金・土は `FRI,SAT` です。7:45 UTC は 16:45 JST で、日付は変わりません。積む開催日は、発火した瞬間の日本時間の翌日です。

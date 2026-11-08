@@ -69,6 +69,8 @@ npm run check
 
 `npm run check` は型検査とテストの両方です。BASHIRA、Gemini、Notion はテストではモックです。
 
+GitHub Actions のワークフロー [`.github/workflows/check.yml`](.github/workflows/check.yml) は、pull request と `main` への push で `npm ci` のあと `npm run check` を実行します。シークレットは使わず、デプロイもしません。本番とプレビューのデプロイは Workers Builds のままです。
+
 BASHIRA の初回認可は、デプロイと Access のあと、ブラウザで `GET /oauth/start` を開きます。詳細は [docs/bashira-auth.md](docs/bashira-auth.md) です。
 
 ## 本番へのデプロイ

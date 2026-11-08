@@ -111,6 +111,6 @@ predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回�
 
 金曜と土曜の 16:45（日本時間）に、翌日の開催を積みます。式は `45 7 * * FRI,SAT` です。時刻の決め方は [operations.md](operations.md) にあります。
 
-`scheduled` は `ctx.waitUntil` に、レースを列挙して積む処理を渡します。予想の完了は待ちません。BASHIRA の `get_races` に、その開催日の `race_meeting_date` を `gte` と `lte` で渡します。上限は 500 件です。続きを取る offset は無いので、`truncated` のときは 10 場に分けて取り直します。1 場でもまだ打ち切れていたら、その日は 1 件も積みません。中止（`race_status` が `canceled`）は積みません。0 件ならログして戻ります。
+`scheduled` は、レースを列挙して積む処理が終わるまで待ちます。予想の完了は待ちません。BASHIRA の `get_races` に、その開催日の `race_meeting_date` を `gte` と `lte` で渡します。上限は 500 件です。続きを取る offset は無いので、`truncated` のときは 10 場に分けて取り直します。1 場でもまだ打ち切れていたら、その日は 1 件も積みません。中止（`race_status` が `canceled`）は積みません。0 件ならログして戻ります。
 
 処理中のジョブと、`phase` が `done` のジョブは飛ばします。`error` のジョブはもう一度積みます。同じ `race_key` が列挙に二度出たときも飛ばします。積めた件数、飛ばした件数、失敗した件数はログと KV `batch:v1:{開催日}` に 1 件残します。レースごとのキーは増やしません。要約は 14 日で消えます。手動で同じことをする入口は [admin.md](admin.md) の `POST /admin/batch` です。
