@@ -7,14 +7,18 @@ import {
   COURSE_SAME_EMPTY,
   COURSE_TRACK_EMPTY,
   PAST_RUN_COLUMN_COUNT,
+  PAST_RUN_HEADER,
+  PAST_RUN_LEGACY_HEADER,
   PAST_RUN_NONE,
   PAST_RUN_UNRESOLVED,
   PAST_RUNS_INTRO,
   PAST_RUNS_TITLE,
   RELATED_COURSES_NONE_LINE,
   RELATED_COURSES_UNREADABLE_LINE,
-  pastRunHeaderLine,
+  pastRunLegacyRuleLine,
+  pastRunRuleFor,
   pastRunRuleLine,
+  pastRunTableHeader,
 } from "./past-runs";
 import { courseSpecFromText, RELATED_COURSES_MAX, type CourseSpec } from "./related-courses";
 import {
@@ -90,6 +94,62 @@ export function extractRunnerStats(input: string): { text: string } | { reason: 
   return { text: parsed.text };
 }
 
+/** 空欄の意味。0 や未出走とは別。本文には足さない。 */
+export const PAST_RUNS_MISSING_NOTE =
+  "空欄は値なしであり、0や未出走ではない。0と書いてあるセルだけがゼロである。レース名の空欄は特別競走ではないことを表す。";
+
+export interface PastRunsMissing {
+  /** 表のデータ行数。見出しと区切り行は数えない。 */
+  rows: number;
+  /** 返した表にある列ごとの空欄件数。0 はその列に空欄が無い。表が無いときは今の28列を 0 で返す。 */
+  blank: Record<string, number>;
+  note: string;
+}
+
+/**
+ * 返した近10走の空欄を数える。本文は変えない。
+ * 表が読めない文字列は行数 0。本文が null のときだけ null。
+ * 条件列が無い古い27列表は、その27列だけを数える。
+ */
+export function describePastRunsMissing(text: string | null): PastRunsMissing | null {
+  if (text == null) return null;
+  const counts = new Map<string, number>();
+  const seen = new Set<string>();
+  let rows = 0;
+  let active: readonly string[] | null = null;
+  for (const line of splitLines(text)) {
+    const header = pastRunTableHeader(line);
+    if (header) {
+      active = header;
+      for (const name of header) seen.add(name);
+      continue;
+    }
+    if (line === pastRunRuleLine() || line === pastRunLegacyRuleLine()) continue;
+    const names = dataColumns(line, active);
+    if (!names) continue;
+    active = names;
+    for (const name of names) seen.add(name);
+    rows += 1;
+    const cells = line.slice(1, -1).split("|").map((cell) => cell.trim());
+    names.forEach((name, index) => {
+      if (cells[index] === "") counts.set(name, (counts.get(name) ?? 0) + 1);
+    });
+  }
+  const order = seen.size > 0 ? PAST_RUN_HEADER.filter((name) => seen.has(name)) : [...PAST_RUN_HEADER];
+  const blank: Record<string, number> = {};
+  for (const name of order) blank[name] = counts.get(name) ?? 0;
+  return { rows, blank, note: PAST_RUNS_MISSING_NOTE };
+}
+
+function dataColumns(line: string, active: readonly string[] | null): readonly string[] | null {
+  if (forbidden(line) || !line.startsWith("|") || !line.endsWith("|")) return null;
+  const width = line.slice(1, -1).split("|").length;
+  if (active && active.length === width) return active;
+  if (width === PAST_RUN_COLUMN_COUNT) return PAST_RUN_HEADER;
+  if (width === PAST_RUN_LEGACY_HEADER.length) return PAST_RUN_LEGACY_HEADER;
+  return null;
+}
+
 /** include=past_runs のときだけ応答へ足す欄。馬柱とユーザー文は含めない。 */
 export function pastRunsSnapshotFields(stored: PredictInputRecord | null): Record<string, unknown> {
   if (!stored) {
@@ -97,6 +157,7 @@ export function pastRunsSnapshotFields(stored: PredictInputRecord | null): Recor
       input_run_id: null,
       saved_at: null,
       past_runs: null,
+      past_runs_missing: null,
       course_records: null,
       runner_stats: null,
       related_courses: null,
@@ -118,6 +179,7 @@ export function pastRunsSnapshotFields(stored: PredictInputRecord | null): Recor
     input_run_id: stored.runId,
     saved_at: stored.savedAt,
     past_runs: past.text,
+    past_runs_missing: describePastRunsMissing(past.text),
     course_records: course.text,
     runner_stats: runner.text,
     related_courses: related.view,
@@ -365,11 +427,12 @@ function parsePastHorse(lines: string[], headingIndex: number): { lines: string[
   const first = lines[headingIndex + 1];
   if (first == null || forbidden(first)) return { reason: SHAPE_PAST };
   if (first === PAST_RUN_UNRESOLVED || first === PAST_RUN_NONE) return { lines: [heading, first], nextIndex: headingIndex + 2 };
-  if (first !== pastRunHeaderLine() || lines[headingIndex + 2] !== pastRunRuleLine()) return { reason: SHAPE_PAST };
+  const columns = pastRunTableHeader(first);
+  if (!columns || lines[headingIndex + 2] !== pastRunRuleFor(columns)) return { reason: SHAPE_PAST };
   const body = [heading, first, lines[headingIndex + 2]!];
   let index = headingIndex + 3;
-  if (!isDataRow(lines[index] ?? "")) return { reason: SHAPE_PAST };
-  while (index < lines.length && isDataRow(lines[index]!)) {
+  if (!isDataRow(lines[index] ?? "", columns.length)) return { reason: SHAPE_PAST };
+  while (index < lines.length && isDataRow(lines[index]!, columns.length)) {
     body.push(lines[index]!);
     index += 1;
   }
@@ -423,10 +486,10 @@ function isHorseHeading(line: string): boolean {
   return HORSE_HEADING.test(line) && !forbidden(line);
 }
 
-function isDataRow(line: string): boolean {
-  if (forbidden(line) || line === pastRunHeaderLine() || line === pastRunRuleLine()) return false;
+function isDataRow(line: string, width: number): boolean {
+  if (forbidden(line) || pastRunTableHeader(line) || line === pastRunRuleLine() || line === pastRunLegacyRuleLine()) return false;
   if (!line.startsWith("|") || !line.endsWith("|")) return false;
-  return line.slice(1, -1).split("|").length === PAST_RUN_COLUMN_COUNT;
+  return line.slice(1, -1).split("|").length === width;
 }
 
 function forbidden(line: string): boolean {

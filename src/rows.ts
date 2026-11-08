@@ -38,3 +38,21 @@ export function numberField(row: Record<string, unknown>, key: string): number |
   if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
   return null;
 }
+
+/**
+ * 開催日の日付部分。`YYYY-MM-DD` と、その直後が `T` の時刻付き（`2026-10-12T00:00:00Z`）を受ける。
+ * タイムゾーンでは日付を動かさない。日付として読めないときは null。
+ */
+export function meetingDay(value: string | null): string | null {
+  if (!value) return null;
+  const day = value.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  if (value.length !== 10 && value[10] !== "T") return null;
+  return day;
+}
+
+/** 比較に使う開催日。時刻付きは日付だけにし、日付として読めない文字列はそのまま返す。 */
+export function comparableMeetingDay(value: string | null): string | null {
+  if (!value) return null;
+  return meetingDay(value) ?? value;
+}
