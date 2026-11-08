@@ -4,7 +4,7 @@
 
 ## 段階
 
-`POST /run` はレースを 1 件だけ Queue `jra-bashira-race` に積みます。Consumer の `max_batch_size` は 1 で、メッセージを 1 件ずつ処理します。ジョブの `phase` は次の順です。
+`POST /run` はレースを 1 件だけ Queue `jra-bashira-race` に積みます。Consumer の `max_batch_size` は 1 で、1 つの配送はメッセージ 1 件です。別レースは `max_concurrency` の 3 件まで同時に進みます。ジョブの `phase` は次の順です。
 
 1. `collect`（メッセージ `start`）。馬場を 1 回取り、`tools/list` のあと `get_races`、出馬表の `get_entries`、単勝の `get_odds` を取る。
 2. `form`（メッセージ `form`）。走れる馬の近走を、未処理 8 頭ずつ取る。
@@ -23,7 +23,7 @@
 
 コースデータ要約は、この集計とは別に、`predict` の中で Gemini の前に作ります。同じ開催場・芝またはダート・距離で、レース日の前日から過去 `STATS_PERIOD_YEARS` 年を `get_stats` で数え、率はコードで計算します。失敗しても予想は止めず、ジョブに理由を残してコース分析を続けます。Notion の書式には足しません。中身は [course-odds.md](course-odds.md)、差し込みは [prompts.md](prompts.md) です。
 
-`predict` の 1 配送で、コース分析とレース予想の `streamGenerateContent`（`alt=sse`）を続けて呼びます。思考レベルは両方 `high` です。`generateContent` は本文が揃うまで応答ヘッダを返さないため、長いレース予想が約 125 秒で HTTP 524 になり、predict ごと再試行されていた。ストリームはヘッダのあとで本文を届ける。`fetch` の待ちは CPU 時間に入らず、1 本のストリームはサブリクエスト 1 件である。思考トークンが増えると壁時計が長くなり、Queue consumer の 15 分に当たりやすくなります。上限で打ち切られた配送は、予想が保存されていなければ再試行で両方の呼び出しからやり直します。コース分析の検索クエリも、そのたびに数え直されます。途中で切れたストリームも失敗にして、同じ再試行に乗せる。
+`predict` の 1 配送で、コース分析とレース予想の `streamGenerateContent`（`alt=sse`）を続けて呼びます。思考レベルは両方 `high` です。以前の `generateContent` は本文が揃うまで応答ヘッダを返さないため、長いレース予想が約 125 秒で HTTP 524 になり、predict ごと再試行されていた。ストリームはヘッダのあとで本文を届ける。2026-11-08 の東京11Rでは、この経路で 524 も再試行も無かった。記録は [verification.md](verification.md) です。`fetch` の待ちは CPU 時間に入らず、1 本のストリームはサブリクエスト 1 件である。思考トークンが増えると壁時計が長くなり、Queue consumer の 15 分に当たりやすくなります。上限で打ち切られた配送は、予想が保存されていなければ再試行で両方の呼び出しからやり直します。コース分析の検索クエリも、そのたびに数え直されます。途中で切れたストリームも失敗にして、同じ再試行に乗せる。
 
 コース分析のユーザー文と、コース分析・レース予想の出力全文は、同じ KV の `trace:v1:{raceKey}` に残します。システムプロンプトの本文は残しません。馬柱とレース予想のユーザー文は、これまでどおり `input:v1:{raceKey}` です。値の上限は馬柱の保存と同じです。見方は [admin.md](admin.md) の `GET /admin/inspect` です。
 
@@ -56,7 +56,7 @@ Free プランの外部 `fetch` は 1 呼び出し 50 件まで、とコード�
 | Worker の外部 `fetch` | `EXTERNAL_BUDGET` | 45 |
 | Durable Object の外部 `fetch` | `DO_EXTERNAL_BUDGET` | 40 |
 
-KV、Queue、Durable Object への内部呼び出しは、この外部件数に入れません。以前の README は、Free プランの内部呼び出し上限を 1000 と書いていました。その数は、このリポジトリの定数にはありません。
+KV、Queue、Durable Object へのバインディング呼び出しは、この外部件数に入れません。Free プランでは、それらへのサブリクエストが 1 呼び出し 1,000 件までです。この 1,000 はリポジトリの定数ではありません。日次の KV 書き込み（1,000）と Queue 操作（10,000）、同じキーへの書き込みが 1 秒に 1 回であることは、[operations.md](operations.md) にまとめてあります。429 のときは 1 秒、2 秒、4 秒待って同じ書き込みをやり直します（`KV_PUT_BACKOFF_MS`）。
 
 レース情報を足すための外部 `fetch` は 0 回です。既存の `get_races` 1 回と、出馬表の `get_entries` 1 回の列を増やすだけです。Notion 段の予算 45 も変えません。過去走とコース成績の BASHIRA 呼び出しは predict の配送で、Notion の配送には入れません。
 
@@ -113,4 +113,4 @@ predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回�
 
 `scheduled` は `ctx.waitUntil` に、レースを列挙して積む処理を渡します。予想の完了は待ちません。BASHIRA の `get_races` に、その開催日の `race_meeting_date` を `gte` と `lte` で渡します。上限は 500 件です。続きを取る offset は無いので、`truncated` のときは 10 場に分けて取り直します。1 場でもまだ打ち切れていたら、その日は 1 件も積みません。中止（`race_status` が `canceled`）は積みません。0 件ならログして戻ります。
 
-処理中のジョブと、`phase` が `done` のジョブは飛ばします。`error` のジョブはもう一度積みます。積めた件数、飛ばした件数、失敗した件数はログと KV `batch:v1:{開催日}` に 1 件残します。レースごとのキーは増やしません。手動で同じことをする入口は [admin.md](admin.md) の `POST /admin/batch` です。
+処理中のジョブと、`phase` が `done` のジョブは飛ばします。`error` のジョブはもう一度積みます。同じ `race_key` が列挙に二度出たときも飛ばします。積めた件数、飛ばした件数、失敗した件数はログと KV `batch:v1:{開催日}` に 1 件残します。レースごとのキーは増やしません。要約は 14 日で消えます。手動で同じことをする入口は [admin.md](admin.md) の `POST /admin/batch` です。

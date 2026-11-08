@@ -21,7 +21,7 @@
 処理の骨格は次のとおりです。
 
 1. Access を通した `POST /run` が、レース 1 件を Queue `jra-bashira-race` に積む。金曜・土曜の cron と `POST /admin/batch` も、同じ関数でレースごとに積む。
-2. Consumer がメッセージを 1 件ずつ進める。段階は、出走と馬場の収集、馬ごとの近走、コース集計、Gemini、Notion への書き込みです。
+2. Consumer は、1 つの配送でメッセージを 1 件進める（`max_batch_size` は 1）。別レースは同時に 3 件まで進む（`max_concurrency`）。段階は、出走と馬場の収集、馬ごとの近走、コース集計、Gemini、Notion への書き込みです。
 3. 同じレースを再実行するときは、前の BASHIRA ページをアーカイブし、同じ書式で新しいページを作ります。
 
 段階の分割、外部呼び出しの上限、同じレースのロックは [docs/pipeline.md](docs/pipeline.md) に書いてあります。枠・4角・馬場状態のコース集計（`get_stats` のキャッシュ）は、コース分析にもレース予想にも渡しません。コース分析には、別に計算したコースデータ要約を渡します。レース予想には、父・母の父・騎手のこのコースの成績を `{{runner_stats}}` で渡します。差し込み名は [docs/prompts.md](docs/prompts.md)、集計の中身は [docs/course-odds.md](docs/course-odds.md) です。
@@ -129,7 +129,7 @@ npx wrangler secret put NOTIFY_WEBHOOK_KEY
 
 | メソッド | パス | 認証 | 役割 |
 | --- | --- | --- | --- |
-| `GET` | `/health` | なし | 生存確認。`mode` は `next-day-batch`。`version`、`commit`、`version_id` も返す |
+| `GET` | `/health` | なし | 生存確認。`ok` と `mode`（`next-day-batch`）、`version`（いまは `0.9.0`）、`commit`、`version_id` を返す |
 | `POST` | `/run` | Access JWT | レース 1 件を積む。受理は 202、処理中は 409 |
 | `POST` | `/admin/batch` | Access JWT | 指定した開催日の全レースを積む。`dry_run: true` は一覧だけで積まない |
 | `GET` | `/oauth/start` | Access JWT | BASHIRA の認可を始める |
@@ -161,6 +161,6 @@ npx wrangler secret put NOTIFY_WEBHOOK_KEY
 | [docs/admin.md](docs/admin.md) | 管理用エンドポイント |
 | [docs/notion.md](docs/notion.md) | Notion のプロパティ、ページの作り方、本文のブロック |
 | [docs/course-odds.md](docs/course-odds.md) | コース集計、馬場、単勝オッズ |
-| [docs/operations.md](docs/operations.md) | シークレット、ビルドの commit、プレビュー、テスト |
+| [docs/operations.md](docs/operations.md) | シークレット、ビルドの commit、プレビュー、Free プランの上限、テスト |
 | [docs/verification.md](docs/verification.md) | 以前の環境で確認できたことと、できていないこと |
 | [docs/known-issues.md](docs/known-issues.md) | 既知の問題 |
