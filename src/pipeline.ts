@@ -22,13 +22,15 @@ import {
   pageMatchesRace,
   type NotionSchema,
 } from "./notion";
-import { interpretOdds } from "./odds";
+import { interpretOdds, renderWinOddsText } from "./odds";
 import { saveLlmTrace } from "./llm-trace";
 import { loadPrompt } from "./prompts";
 import { numberField, rowsToObjects, stringField } from "./rows";
 import { ambiguousNameMessage } from "./bashira/mcp";
 import { savePredictInput } from "./predict-input";
+import { careerHorses, loadPastPerformance, renderCourseRecords, renderPastRuns, type CareerHorse } from "./past-runs";
 import { buildRaceFacts } from "./race-facts";
+import { relatedCoursesGap, stripRelatedCourses } from "./related-courses";
 import { horseFactGaps, renderUmabashira } from "./umabashira";
 import type { BashiraPort } from "./bashira/port";
 import { assertFields, assertToolArgs, catalogFromTools, selectColumns } from "./schema";
@@ -510,17 +512,34 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       courseUser: course.userText,
       courseOutput: course.text,
     });
+    const strippedCourse = stripRelatedCourses(course.text);
+    const relatedGap = relatedCoursesGap(strippedCourse.parse);
+    if (strippedCourse.parse.status !== "ok") {
+      deps.log?.("related_courses_unreadable", { raceKey: state.race.raceKey, status: strippedCourse.parse.status });
+    }
+    const horses = careerHorses(state.entries, state.formTasks ?? []);
+    const performance = await loadRacePastPerformance(state, deps, horses);
+    const paces = performance.paces;
+    const pastRuns = renderPastRuns({ race: state.race, horses, rows: performance.rows, paces });
+    const current = surface && distance != null ? { track: state.race.venue, surface, distance } : null;
+    const related = strippedCourse.parse.status === "ok" ? strippedCourse.parse.courses : null;
+    const courseRecords = renderCourseRecords({ race: state.race, horses, rows: performance.rows, current, related });
     const umabashira = renderUmabashira({ race: state.race, entries: state.entries, formTasks: state.formTasks ?? [] });
     const snapshots = horseFormSnapshots(state.entries, state.formTasks ?? []);
     const facts = buildRaceFacts({ raceRow: state.raceRow, entries: state.entries });
     state.raceInputGaps = [...facts.gaps, ...horseFactGaps(state.entries)];
+    if (relatedGap) state.raceInputGaps.push(relatedGap);
+    state.raceInputGaps.push(...performance.gaps);
     const raceInput = fillRaceUser(racePrompt.user, {
       race_facts: facts.text,
       umabashira,
-      course_analysis: course.text,
+      course_analysis: strippedCourse.text,
       weather: going.weather,
       condition: going.condition,
       remarks: composeRemarks(state.remarks ?? "", going.babaDetail, state.race),
+      past_runs: pastRuns,
+      course_records: courseRecords,
+      win_odds: renderWinOddsText(state.entries, state.odds),
     });
     const stored = await savePredictInput(deps.kv, {
       raceKey: state.race.raceKey,
@@ -572,7 +591,7 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       });
     }
     state.prediction = {
-      courseText: course.text,
+      courseText: strippedCourse.text,
       courseModel: models.config.course,
       raceModel: models.config.race,
       courseModelVersion: course.modelVersion,
@@ -586,6 +605,32 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
   state.updatedAt = deps.now().toISOString();
   await commitJob(deps, state);
   await enqueuePhase(state, deps);
+}
+
+/**
+ * 通算と近10走は同じ get_entries。通常 1 回（見積もり 450 行、馬名 100 件で分割、上限 8）。
+ * 前半3F・後半3Fの get_races は race_id 100 件ごとで最大 2 回。tools/list が 1 回。
+ * Notion 段では呼ばない。Worker の外部 fetch 予算（45）には、DO 経由の BASHIRA を数えない。
+ */
+async function loadRacePastPerformance(state: JobState, deps: PipelineDeps, horses: CareerHorse[]) {
+  if (!horses.some((horse) => !horse.unresolved)) {
+    return { rows: [], paces: new Map<string, { first3f: number | null; last3f: number | null }>(), gaps: [], careerCalls: 0, paceCalls: 0 };
+  }
+  const listed = await deps.bashira.listTools();
+  if (!listed.ok) throw toolError(listed);
+  const performance = await loadPastPerformance({
+    bashira: deps.bashira,
+    catalog: catalogFromTools(listed.tools),
+    race: state.race,
+    horses,
+  });
+  deps.log?.("past_runs_fetch", {
+    raceKey: state.race.raceKey,
+    careerCalls: performance.careerCalls,
+    paceCalls: performance.paceCalls,
+    gaps: performance.gaps.length,
+  });
+  return performance;
 }
 
 async function runNotion(state: JobState, deps: PipelineDeps): Promise<void> {

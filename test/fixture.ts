@@ -31,6 +31,8 @@ const RACE_FIELDS = [
   "weight_type",
   "post_time",
   "odds_observed_at",
+  "first_3f_sec",
+  "last_3f_sec",
 ];
 
 const ENTRY_FIELDS = [
@@ -82,6 +84,7 @@ const ENTRY_FIELDS = [
   "scheduled_horse_count",
   "local_overseas_type",
   "dead_heat",
+  "is_jockey_change",
 ];
 
 const STAT_FIELDS = [

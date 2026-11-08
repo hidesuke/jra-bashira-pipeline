@@ -176,7 +176,7 @@ curl -sS "https://<worker>/admin/inspect?date=2026-11-08" \
 | `umabashira` | LLM に渡した馬柱。未保存なら null |
 | `course.user_text` / `course.prompt_version` | コース分析のユーザー文とプロンプト版 |
 | `course.output_text` | コース分析の全文。Notion で切り詰める前 |
-| `race_prediction.user_text` / `race_prediction.prompt_version` | レース予想のユーザー文とプロンプト版。ユーザー文にはレース情報が入る |
+| `race_prediction.user_text` / `race_prediction.prompt_version` | レース予想のユーザー文とプロンプト版。ユーザー文にはレース情報、近10走、コース成績が入る。`{{win_odds}}` はプロンプトに書いてあるときだけ |
 | `race_input_gaps` | その入力で空欄にした項目。予想の前は null |
 | `race_prediction.output_text` | レース予想のモデル出力全文 |
 | `race_prediction.予想本文` | 保存した予想本文。見出しから読んだあとの本文 |

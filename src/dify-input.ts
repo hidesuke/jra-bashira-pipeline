@@ -9,6 +9,9 @@ export const RACE_USER_PLACEHOLDERS = {
   weather: "{{weather}}",
   condition: "{{condition}}",
   remarks: "{{remarks}}",
+  past_runs: "{{past_runs}}",
+  course_records: "{{course_records}}",
+  win_odds: "{{win_odds}}",
 } as const;
 
 export type RaceUserValues = {
@@ -18,6 +21,9 @@ export type RaceUserValues = {
   weather: string;
   condition: string;
   remarks: string;
+  past_runs: string;
+  course_records: string;
+  win_odds: string;
 };
 
 /**
@@ -35,12 +41,28 @@ export const RACE_USER_DIFY_TOKENS = {
 export function fillRaceUser(template: string, values: RaceUserValues): string {
   const message = "レース予想のユーザー文に未置換の差し込み（{{）が残っています";
   const filled = fillPlaceholders(template, RACE_USER_PLACEHOLDERS, RACE_USER_DIFY_TOKENS, values, message);
-  if (template.includes(RACE_USER_PLACEHOLDERS.race_facts)) return filled;
-  const block = values.race_facts.trim();
-  if (!block) return filled;
-  const text = `${block}\n\n${filled}`;
+  const leading = leadingBlocks(template, values);
+  if (leading.length === 0) return filled;
+  const text = `${leading.join("\n\n")}\n\n${filled}`;
   if (text.includes("{{")) throw new JobError(message, false);
   return text;
+}
+
+/**
+ * user にまだ無いものだけ先頭へ足す。順は race_facts、past_runs、course_records。
+ * win_odds は置かれたときだけ入れる。無いプロンプトへは足さない。
+ */
+function leadingBlocks(template: string, values: RaceUserValues): string[] {
+  const blocks: Array<{ token: string; text: string }> = [
+    { token: RACE_USER_PLACEHOLDERS.race_facts, text: values.race_facts },
+    { token: RACE_USER_PLACEHOLDERS.past_runs, text: values.past_runs },
+    { token: RACE_USER_PLACEHOLDERS.course_records, text: values.course_records },
+  ];
+  return blocks.flatMap((block) => {
+    if (template.includes(block.token)) return [];
+    const text = block.text.trim();
+    return text ? [text] : [];
+  });
 }
 
 /** コース特徴ユーザー文。競馬場・芝/ダート/障害・距離と、コードで計算したコースデータ要約。 */

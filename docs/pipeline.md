@@ -27,7 +27,15 @@
 
 コース分析のユーザー文と、コース分析・レース予想の出力全文は、同じ KV の `trace:v1:{raceKey}` に残します。システムプロンプトの本文は残しません。馬柱とレース予想のユーザー文は、これまでどおり `input:v1:{raceKey}` です。値の上限は馬柱の保存と同じです。見方は [admin.md](admin.md) の `GET /admin/inspect` です。
 
-レース予想のユーザー文には、レース名、グレード、クラス、競走種別、頭数、コース（A〜D）、斤量種別、発走時刻と、各馬の調教師・馬体重を足します。出典は collect で既に取る `get_races` と出馬表の `get_entries` です。`trainer_east_west` と `horse_weight_difference_with_previous_race` は、tools/list にあるときだけ列に足します。追加の呼び出しは 0 回です。内外回りと仮柵は項目が無いので空欄です。オッズはこの入力に足しません。`get_odds` はこれまでどおり Notion 用の 1 回だけです。値が空でも予想は止めず、空欄にした項目をジョブの `raceInputGaps` に残します。中身は [prompts.md](prompts.md) と [umabashira.md](umabashira.md) です。
+レース予想のユーザー文には、レース名、グレード、クラス、競走種別、頭数、コース（A〜D）、斤量種別、発走時刻と、各馬の調教師・馬体重を足します。出典は collect で既に取る `get_races` と出馬表の `get_entries` です。`trainer_east_west` と `horse_weight_difference_with_previous_race` は、tools/list にあるときだけ列に足します。内外回りと仮柵は項目が無いので空欄です。レース情報そのものにオッズは足しません。
+
+それに加え、predict で各馬の通算を `get_entries` で取ります。近10走の表（`{{past_runs}}`）と、同じコース・同じ競馬場・関連コースの成績（`{{course_records}}`）は、この応答から作ります。近10走のための別呼び出しはありません。関連コースの一覧は、コース分析の末尾から読み、`{{course_analysis}}` と Notion のコース分析からは除きます。読めないときは `raceInputGaps` に残し、関連コースの成績だけ空欄にして予想は続けます。今回の単勝（`{{win_odds}}`）は、collect で既に取る `get_odds` と出馬表から作り、追加の呼び出しはしません。中身は [prompts.md](prompts.md) と [umabashira.md](umabashira.md) です。
+
+通算の `get_entries` は、出走する馬の名前をまとめて1回で取ります（`limit` 500。続きを取る offset は無い）。`career_starts` の見積もりが 450 行を超えるとき、または馬名が 100 件を超えるときは、呼び出しを分けます。応答が打ち切れて複数頭が混ざっているときは、頭数を半分にして取り直します。1頭が 500 行で打ち切れたときは、その馬の欠けを `raceInputGaps` に残します。この取得は 1 配送で最大 8 回（`CAREER_FETCH_LIMIT`）です。同名で近走を特定できない馬は、この呼び出しに入れません。
+
+近10走に出てきた JRA のレースの前半3Fと後半3Fは、`get_races` を `race_id` の配列で取ります。配列は 100 件までなので、最大 2 回（18頭×10走は 180 件、同じレースは1回にまとめる）です。列が tools/list に無いときは呼び出しをせず、セルを空欄にして `raceInputGaps` に残します。
+
+predict のこの取得は、コース分析のあと、レース予想の前です。`tools/list` がコースデータ要約とは別に 1 回入ります。失敗（認可、上限、上流）のときは、そのエラーで止めます。関連コースの一覧が読めないことだけでは止めません。
 
 レース予想の本文をジョブに保存する前に、買い目の点数を馬番の列から数え直します。見出しの券種（3連複、3連単、馬連、馬単、ワイドなど）ごとに、フォーメーション、ボックス、流しの列を読み、同じ馬が重なる組と、同じ組の重複を除いて数えます。見出しの点数と違うときだけ、その数字を差し替えます。列が読めない買い目は本文を変えません。数え直しに失敗しても予想は止めません。差し替えたときはジョブの `ticketCountCorrections` とログ `ticket_count_corrected` に、券種、見出しの点数、数え直した点数を残します。`trace:v1:{raceKey}` のモデル出力は、差し替える前のままです。Notion の見出し、並び、文言は変えません。
 
@@ -42,7 +50,9 @@ Free プランの外部 `fetch` は 1 呼び出し 50 件まで、とコード�
 
 KV、Queue、Durable Object への内部呼び出しは、この外部件数に入れません。以前の README は、Free プランの内部呼び出し上限を 1000 と書いていました。その数は、このリポジトリの定数にはありません。
 
-レース情報を足すための外部 `fetch` は 0 回です。既存の `get_races` 1 回と、出馬表の `get_entries` 1 回の列を増やすだけです。Notion 段の予算 45 も変えません。
+レース情報を足すための外部 `fetch` は 0 回です。既存の `get_races` 1 回と、出馬表の `get_entries` 1 回の列を増やすだけです。Notion 段の予算 45 も変えません。過去走とコース成績の BASHIRA 呼び出しは predict の配送で、Notion の配送には入れません。
+
+predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回（コース分析とレース予想）です。BASHIRA は Durable Object 経由で、この 45 件には数えません。仮に Durable Object への呼び出しも 50 件に数えるとしても、predict で増えるのは `tools/list` 1 回、通算の `get_entries` が通常 1 回（上限 8）、ペースの `get_races` が最大 2 回です。既存のコースデータ要約（`tools/list` 1、`callTools` 1、`get_races` 1）と Gemini 2 を足しても 50 より少ないです。Notion 段は外部 45 のままです。
 
 上限に達した Worker は、ジョブを分割して止める再試行可能なエラーにします。Notion へ書き始めたあとなら、下の「Notion の続き」に従います。
 
