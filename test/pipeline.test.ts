@@ -964,6 +964,43 @@ describe("pipeline", () => {
     expect(job.phase).toBe("done");
   });
 
+  it("rewrites a wrong ticket count before the Notion page and keeps the model output", async () => {
+    const env = harness({
+      raceText: [
+        "### レース情報",
+        "- **指数分布ステータス:** 【1強・独走型】",
+        "- **予想自信度:** 【A】 （差がある）",
+        "- **波乱度:** 【堅実】 （順当）",
+        "",
+        "### 競馬新聞風印予想",
+        "- ◎ 1 ア",
+        "",
+        "### 買い目推奨・馬券戦術",
+        "- <b>3連複フォーメーション（9点）:</b>",
+        "- 1頭目: 7",
+        "- 2頭目: 4, 5, 17",
+        "- 3頭目: 3, 4, 5, 9, 11, 17",
+      ].join("\n"),
+    });
+    await seedPrompts(env.kv);
+    const logs: string[] = [];
+    env.deps.log = (event) => {
+      logs.push(event);
+    };
+    const results = await drain(env, { kind: "start", runId: "run-tickets", race, requestedBy: "Grok Bot" });
+    expect(results.every((result) => result === "ack")).toBe(true);
+    const job = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(job.ticketCountCorrections).toEqual([{ tickets: "3連複", declared: 9, counted: 12 }]);
+    expect(job.prediction?.予想本文).toContain("3連複フォーメーション（12点）");
+    expect(job.prediction?.予想本文).not.toContain("（9点）");
+    expect(logs).toContain("ticket_count_corrected");
+    const trace = await loadLlmTrace(env.kv, race.raceKey);
+    expect(trace?.raceOutput).toContain("3連複フォーメーション（9点）");
+    const notion = JSON.stringify(env.notionCalls);
+    expect(notion).toContain("3連複フォーメーション（12点）");
+    expect(notion).not.toContain("（9点）");
+  });
+
   it("stores the course user text and both model outputs without the system prompt", async () => {
     const env = harness();
     await seedPrompts(env.kv);

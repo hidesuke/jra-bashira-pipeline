@@ -261,6 +261,11 @@ async function getJob(url: URL, deps: HttpDeps): Promise<Response> {
           reason: state.odds.reason,
         }
       : null,
+    ticket_count_corrections: (state.ticketCountCorrections ?? []).map((item) => ({
+      tickets: item.tickets,
+      declared: item.declared,
+      counted: item.counted,
+    })),
   });
 }
 

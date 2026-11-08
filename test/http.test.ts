@@ -247,6 +247,7 @@ describe("http", () => {
     expect(summary.course_summary_period).toEqual({ from: "2021-11-06", to: "2026-11-06" });
     expect(summary.course_summary_race_count).toBe(40);
     expect(JSON.stringify(summary)).not.toContain("SECRET_PROMPT_BODY");
+    expect(summary).toMatchObject({ ticket_count_corrections: [] });
   });
 
   it("returns stored predict input only behind Access", async () => {
