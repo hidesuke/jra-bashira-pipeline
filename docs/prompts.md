@@ -12,6 +12,8 @@ Gemini は `system` を `systemInstruction`、`user` を `contents` の user メ
 
 コース分析とレース予想の両方に、`generationConfig.thinkingConfig.thinkingLevel` を `high` と付けます。`includeThoughts` は付けません。`temperature` や `maxOutputTokens` など、思考レベル以外の `generationConfig` は付けません。思考レベルを上げると思考トークンが増え、`predict` の Queue consumer が 15 分の上限に当たりやすくなります。詳細は [pipeline.md](pipeline.md) です。
 
+エンドポイントは `streamGenerateContent` で、クエリは `alt=sse` です。リクエスト本体は `generateContent` のときと同じです。コース分析とレース予想のどちらも `json` は付けません。`json` を付けたときだけ `responseMimeType` と `responseSchema` を足し、再試行できない失敗のときだけスキーマ無しでもう一度呼びます。届いた `parts` は順に連結し、`thought` が true の部分は本文に入れません。`finishReason` と `modelVersion` は最後に届いた文字列、`usageMetadata` は最後にそのフィールドが付いていたチャンク、`webSearchQueries` は最後に届いた配列です。HTTP の失敗メッセージはこれまでと同じです。ストリーム中のエラーと、途中で切れたストリームは失敗にし、再試行できるものは Queue の再試行に乗せます。
+
 コース分析（`prompt:v2:course`）だけ、`tools` に `{ "googleSearch": {} }` を付けます。レース予想には付けません。
 
 応答の `parts` のうち `thought` が true の部分は本文に連結しません。`groundingMetadata` の引用は本文に混ぜません。Notion の書式は変えません。

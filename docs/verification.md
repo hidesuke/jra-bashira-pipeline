@@ -18,7 +18,7 @@
 
 - ブラウザでの認可コード交換、refresh の実寿命、refresh token のローテーション有無
 - Worker からの `tools/list` と `tools/call` の実レスポンス
-- Gemini の `models.list` と `generateContent` の実応答
+- Gemini の `models.list` と `streamGenerateContent` の実応答
 - Notion への作成と更新
 - Cloudflare 上での Queue、Durable Object、Access JWT、50 サブリクエスト上限
 
