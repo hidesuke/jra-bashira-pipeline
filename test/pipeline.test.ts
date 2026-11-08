@@ -736,8 +736,8 @@ describe("pipeline", () => {
       officialResult: 4,
     });
     expect(job.consistencyWarnings?.map((warning) => warning.message)).toEqual([
-      "ミラージュナイトの目黒記念は4着だが、予想本文は2着と書いている",
-      "ミラージュナイトの今回斤量は57kgだが、予想本文は55kgと書いている",
+      "ミラージュナイトの目黒記念は4着だが、予想本文は2着と書いている: 「目黒記念で2着」",
+      "ミラージュナイトの今回斤量は57kgだが、予想本文は55kgと書いている: 「今回斤量 55 kg」",
     ]);
     expect(logs).toContain("prediction_consistency");
     const notion = JSON.stringify(env.notionCalls);

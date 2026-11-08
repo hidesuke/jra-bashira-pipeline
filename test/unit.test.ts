@@ -675,8 +675,25 @@ describe("dify v1 inputs", () => {
     });
     expect(line).toContain("2026-10-12");
     expect(line).toContain("東京芝1600m（A）");
-    expect(line).toContain("2着");
-    expect(line).toContain("頭数16");
+    expect(line).toContain("2着/16頭");
+    expect(line).not.toContain("異常なし");
+    const finished = [
+      { race_name_main: "目黒記念", official_result: 4, race_abnormality: "異常なし", scheduled_horse_count: 14, entry_status: "finished" },
+      { race_name_main: "目黒記念", official_result: 5, race_abnormality: "異常なし", scheduled_horse_count: 14, entry_status: "finished" },
+      { race_name_main: "京都大賞典", official_result: 6, race_abnormality: "異常なし", scheduled_horse_count: 18, entry_status: "finished" },
+    ];
+    for (const row of finished) {
+      const rendered = formatPastRun(row);
+      expect(rendered).toMatch(/\d+着/);
+      expect(rendered).not.toContain("異常なし");
+    }
+    expect(formatPastRun(finished[0]!)).toContain("目黒記念");
+    expect(formatPastRun(finished[0]!)).toContain("4着/14頭");
+    expect(formatPastRun(finished[1]!)).toContain("5着/14頭");
+    expect(formatPastRun(finished[2]!)).toContain("6着/18頭");
+    const scratched = formatPastRun({ race_abnormality: "競走中止", scheduled_horse_count: 16, race_name_main: "目黒記念" });
+    expect(scratched).toContain("競走中止");
+    expect(scratched).not.toMatch(/\d+着/);
     expect(line).toContain("時計1:33.2");
     expect(line).toContain("着差0.2秒");
     expect(line).toContain("通過3-3-2-2");
