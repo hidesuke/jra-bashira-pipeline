@@ -38,7 +38,7 @@ npm ci
 
 ローカルの `wrangler dev` は、シークレットを `.dev.vars` から読みます。`.dev.vars.example` をコピーし、値は自分の環境だけに書いてください。`.dev.vars` はコミットしません。
 
-例ファイルにある名前は `GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY` です。`ACCESS_AUD` も実行時に必要ですが、例ファイルには行がありません。保護された経路をローカルで試すときは、同じファイルに足してください。`TOKEN_ENCRYPTION_KEY` は `openssl rand -base64 32` で作ります。
+例ファイルにある名前は `GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY`、`ACCESS_AUD` です。`ACCESS_AUD` の値はプレースホルダーです。保護された経路をローカルで試すときは、Access アプリケーションの AUD タグに置き換えてください。`TOKEN_ENCRYPTION_KEY` は `openssl rand -base64 32` で作ります。
 
 本番のシークレットは、最初のデプロイで Worker ができてから入れます。手順は次の節と [docs/operations.md](docs/operations.md) です。
 

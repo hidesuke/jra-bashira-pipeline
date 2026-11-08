@@ -15,7 +15,7 @@ Worker がまだ無い状態では `wrangler secret put` もダッシュボー�
 
 `secret put` はそれ自体がデプロイになります。レースを動かす前に入れてください。入っていないと実行時に失敗します。`ACCESS_AUD` はダッシュボードで設定済みなら、その値を上書きしないでください。
 
-ローカルの `wrangler dev` では同じ名前を `.dev.vars` に書きます。`.dev.vars.example` をコピーしてください。例ファイルにあるのは `GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY` です。`ACCESS_AUD` の行は例に無いので、保護された経路を試すときは自分で足します。`.dev.vars` はコミットしません。
+ローカルの `wrangler dev` では同じ名前を `.dev.vars` に書きます。`.dev.vars.example` をコピーしてください。例ファイルにあるのは `GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY`、`ACCESS_AUD` です。`ACCESS_AUD` の値はプレースホルダーなので、保護された経路を試すときは自分の AUD タグに置き換えます。`.dev.vars` はコミットしません。
 
 `ACCESS_CLIENT_ID_GROK` と `ACCESS_CLIENT_ID_MUSE` は Secret ではなく `vars` です。リポジトリ上の値は空です。Client Secret は Worker に置きません。
 

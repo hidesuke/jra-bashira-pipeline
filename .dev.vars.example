@@ -3,3 +3,5 @@ GEMINI_API_KEY=
 NOTION_TOKEN=
 # openssl rand -base64 32
 TOKEN_ENCRYPTION_KEY=
+# Access アプリケーションの AUD タグ。プレースホルダーを実値に置き換える
+ACCESS_AUD=your-access-application-aud-tag
