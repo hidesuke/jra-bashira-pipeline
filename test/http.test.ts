@@ -325,11 +325,21 @@ describe("http", () => {
     };
     expect(body.umabashira).toBe("馬柱BODY");
     expect(body.race_input).toBeUndefined();
+    expect(body).not.toHaveProperty("past_runs");
+    expect(body).not.toHaveProperty("course_records");
+    expect(body).not.toHaveProperty("saved_at");
     expect(body.horses[0]).toMatchObject({ horse_name: "ミラージュナイト", resolution_status: "unique", past_run_count: 1, career_starts: 12 });
     expect(body.warnings[0]?.message).toContain("2着");
     const full = await handleRequest(authed("/admin/jobs/input?race_key=20261108-05-11"), http);
-    const fullBody = (await full.json()) as { race_input?: string };
+    const fullBody = (await full.json()) as { race_input?: string; past_runs?: string; course_records?: string };
     expect(fullBody.race_input).toBe("入力BODY");
+    expect(fullBody.past_runs).toBeUndefined();
+    expect(fullBody.course_records).toBeUndefined();
+    const inputOnly = await handleRequest(authed("/admin/jobs/input?race_key=20261108-05-11&include=input"), http);
+    const inputBody = (await inputOnly.json()) as { race_input?: string; umabashira?: string; past_runs?: string };
+    expect(inputBody.race_input).toBe("入力BODY");
+    expect(inputBody.umabashira).toBeUndefined();
+    expect(inputBody.past_runs).toBeUndefined();
   });
 
   it("returns a race inspection in json and markdown without secrets or the system prompt", async () => {

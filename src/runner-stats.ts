@@ -24,7 +24,15 @@ export const EXPECTED_RUNNER_SCOPE = "jra_and_non_jra";
 
 export const RUNNER_STATS_HEADING = "# 出走馬のコース成績";
 
-const LOW_SAMPLE_NOTE = "件数が少ないため参考値";
+export const RUNNER_STATS_EMPTY_LINE = "出走する馬はいません。";
+
+export const RUNNER_STATS_RATE_LINE = "率は出走数と勝ち数・3着以内の件数から計算した。";
+
+export const RUNNER_STATS_LOW_SAMPLE = "件数が少ないため参考値";
+
+export function runnerStatsFailureLine(message: string): string {
+  return `取得できませんでした（${message}）。`;
+}
 
 const REQUIRED_FIELDS = [
   "race_track",
@@ -188,12 +196,12 @@ export function renderRunnerStats(input: {
 }): { text: string; gaps: string[] } {
   if (input.failure) {
     return {
-      text: `${RUNNER_STATS_HEADING}\n取得できませんでした（${input.failure}）。`,
+      text: `${RUNNER_STATS_HEADING}\n${runnerStatsFailureLine(input.failure)}`,
       gaps: [`出走馬のコース成績（${input.failure}）`],
     };
   }
   if (input.horses.length === 0) {
-    return { text: `${RUNNER_STATS_HEADING}\n出走する馬はいません。`, gaps: [] };
+    return { text: `${RUNNER_STATS_HEADING}\n${RUNNER_STATS_EMPTY_LINE}`, gaps: [] };
   }
   const gaps: string[] = [];
   const scope = input.scopes[0] ?? null;
@@ -210,7 +218,7 @@ export function renderRunnerStats(input: {
   ];
   if (input.dataThrough) lines.push(`確定済みデータは ${input.dataThrough} まで。`);
   lines.push(scopeLine(scope));
-  lines.push("率は出走数と勝ち数・3着以内の件数から計算した。");
+  lines.push(RUNNER_STATS_RATE_LINE);
   lines.push("");
   for (const horse of input.horses) {
     lines.push(horseHeading(horse));
@@ -823,7 +831,7 @@ function statLine(
     return `${label} ${name}: 取得できず（件数を読めません）`;
   }
   const shown = stat.resolvedName ?? name;
-  const note = stat.starts < minCount ? ` ${LOW_SAMPLE_NOTE}` : "";
+  const note = stat.starts < minCount ? ` ${RUNNER_STATS_LOW_SAMPLE}` : "";
   return `${label} ${shown}: 出走 ${stat.starts}　勝ち ${stat.wins}　勝率 ${formatRate(stat.wins, stat.starts)}　複勝 ${stat.top3}　複勝率 ${formatRate(stat.top3, stat.starts)}${note}`;
 }
 

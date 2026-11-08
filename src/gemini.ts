@@ -153,6 +153,7 @@ async function callGemini(input: GenerateTextInput, json: boolean): Promise<Gemi
     throw new JobError(
       `Gemini (${input.model}) が失敗しました: ${message}`,
       response.status === 429 || response.status >= 500,
+      response.status,
     );
   }
   const candidate = payload.candidates?.[0];

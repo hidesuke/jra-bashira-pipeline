@@ -9,9 +9,12 @@ export const keys = {
   modelsHistory: "config:models:history",
   geminiModels: "cache:v2:gemini-models",
   prompt: (stage: "course" | "race") => `prompt:v2:${stage}`,
-  /** 予想に渡した馬柱とユーザー文。本文が長いときは u / r の分割キーに置く。 */
+  /**
+   * 予想に渡した馬柱とユーザー文。本文が長いときは u / r の分割キーに置く。
+   * 近10走は p、コース成績は c、出走馬のコース成績は s。プロンプト文は入れない。
+   */
   predictInput: (raceKey: string) => `input:v1:${raceKey}`,
-  predictInputChunk: (raceKey: string, part: "u" | "r", index: number) => `input:v1:${raceKey}:${part}:${index}`,
+  predictInputChunk: (raceKey: string, part: "u" | "r" | "p" | "c" | "s", index: number) => `input:v1:${raceKey}:${part}:${index}`,
   /**
    * 確認用に残す LLM のユーザー文と出力全文。システムプロンプトは入れない。
    * 長い本文は cu / co / ro の分割キーに置く。

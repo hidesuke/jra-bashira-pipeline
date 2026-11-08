@@ -2,6 +2,7 @@ import { fetchBaba, babaFailure, type BabaBinding } from "./baba";
 import { pageBlocks, pageTitle } from "./body";
 import { chunkChildren } from "./notion-blocks";
 import { ExternalBudget } from "./budget";
+import { notifyRaceFailed, type NotifyConfig } from "./notify";
 import { collectCourseSummary, courseSummaryText, failedCourseSummary } from "./course-summary";
 import { composeRemarks, fillCourseUser, fillRaceUser, mergeGoing } from "./dify-input";
 import { readRacePrediction } from "./extract-prediction";
@@ -9,7 +10,7 @@ import { checkPredictionConsistency } from "./consistency";
 import { correctTicketCounts, type TicketCountCorrection } from "./ticket-count";
 import { buildFormTasks, finishQualifiedFetch, FORM_BATCH_SIZE, FORM_FETCH_LIMIT, horseFormSnapshots, planFormFetch, type FormTask } from "./form";
 import { courseCallRecord, generateText, raceCallRecord } from "./gemini";
-import { JobWriter, loadJob, type JobState } from "./job";
+import { JobWriter, loadJob, type JobRetry, type JobState } from "./job";
 import { keys, sleepMs } from "./kv";
 import { loadModels } from "./models";
 import {
@@ -27,8 +28,8 @@ import { saveLlmTrace } from "./llm-trace";
 import { loadPrompt } from "./prompts";
 import { numberField, rowsToObjects, stringField } from "./rows";
 import { ambiguousNameMessage } from "./bashira/mcp";
-import { savePredictInput } from "./predict-input";
-import { careerHorses, loadPastPerformance, renderCourseRecords, renderPastRuns, type CareerHorse } from "./past-runs";
+import { savePredictInput, type StoredRelatedCourses } from "./predict-input";
+import { careerHorses, loadPastPerformance, renderCourseRecords, renderPastRuns, renderRelatedCoursesLine, type CareerHorse } from "./past-runs";
 import { collectRunnerStats, RUNNER_STATS_HEADING } from "./runner-stats";
 import { buildRaceFacts } from "./race-facts";
 import { relatedCoursesGap, stripRelatedCourses } from "./related-courses";
@@ -38,10 +39,12 @@ import { assertFields, assertToolArgs, catalogFromTools, selectColumns, type Too
 import { buildStatTasks, hydrateStatCache, writeStatCache, yearFrom } from "./stats";
 import {
   errorMessage,
+  httpStatusOf,
   isRetryable,
   JobError,
   EXTERNAL_BUDGET,
   LOCK_TTL_SECONDS,
+  QUEUE_MAX_RETRIES,
   STATS_BATCH_SIZE,
   type JobMessage,
   type KvStore,
@@ -79,6 +82,10 @@ export interface PipelineDeps {
   jobWriter?: JobWriter;
   /** テストで Notion 段の外部呼び出し上限を下げる。未指定なら EXTERNAL_BUDGET。 */
   externalBudget?: number;
+  /** この配送の外部 fetch。handleJobMessage が作り、通知も同じ予算に数える。 */
+  budget?: ExternalBudget;
+  /** URL が無ければレース失敗の通知はしない。 */
+  notify?: NotifyConfig;
 }
 
 /** ページ ID を保存したあとの分割回数。Queue の max_retries では本文の続きを打ち切らない。 */
@@ -155,23 +162,39 @@ export async function handleJobMessage(
   deps: PipelineDeps,
   delivery?: Delivery,
 ): Promise<"ack" | "retry"> {
-  const bound = bindWriter(deps);
+  const budget = deps.budget ?? new ExternalBudget(deps.externalBudget ?? EXTERNAL_BUDGET);
+  const bound = bindWriter({ ...deps, budget });
   try {
     await dispatch(message, bound);
     return "ack";
   } catch (err) {
     if (await continueNotionLater(message, bound, err)) return "ack";
     const retry = isRetryable(err) && !isFinalAttempt(delivery);
-    const persisted = await persistFailure(message, bound, err, retry);
-    if (!retry && persisted) await releaseLock(bound.kv, raceKeyOf(message));
+    const recorded = await persistFailure(message, bound, err, retry, delivery);
+    if (!retry && recorded.saved) await releaseLock(bound.kv, raceKeyOf(message));
     bound.log?.("job_failed", {
       raceKey: raceKeyOf(message),
       retryable: retry,
-      persisted,
+      persisted: recorded.saved,
       attempt: delivery?.attempt,
       error: errorMessage(err),
     });
-    if (retry || !persisted) return "retry";
+    if (recorded.finalized && recorded.phaseAtFailure) {
+      await notifyRaceFailed(
+        bound.notify,
+        {
+          raceKey: raceKeyOf(message),
+          runId: runIdOf(message),
+          phaseAtFailure: recorded.phaseAtFailure,
+          error: errorMessage(err),
+          attempts: delivery?.attempt ?? 1,
+          httpStatus: httpStatusOf(err),
+          occurredAt: bound.now(),
+        },
+        { budget, fetch: bound.fetch, log: bound.log },
+      );
+    }
+    if (retry || !recorded.saved) return "retry";
     return "ack";
   }
 }
@@ -229,7 +252,7 @@ async function dispatch(message: JobMessage, deps: PipelineDeps): Promise<void> 
 }
 
 async function collect(message: Extract<JobMessage, { kind: "start" }>, deps: PipelineDeps): Promise<void> {
-  const budget = new ExternalBudget();
+  const budget = phaseBudget(deps);
   let baba: JobState["baba"];
   try {
     baba = await fetchBaba({
@@ -343,6 +366,7 @@ async function collect(message: Extract<JobMessage, { kind: "start" }>, deps: Pi
 }
 
 async function runForm(state: JobState, deps: PipelineDeps): Promise<void> {
+  clearRetry(state);
   const tasks = state.formTasks ?? [];
   const pending = tasks.filter((task) => task.status === "pending");
   if (pending.length === 0) {
@@ -419,6 +443,7 @@ function phaseAfterForm(state: JobState): JobState["phase"] {
 }
 
 async function runStats(state: JobState, deps: PipelineDeps): Promise<void> {
+  clearRetry(state);
   const pending = state.statTasks.filter((task) => task.status === "pending");
   if (pending.length === 0) {
     state.phase = "predict";
@@ -479,8 +504,9 @@ async function safeCourseSummary(
 }
 
 async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
+  clearRetry(state);
   if (!state.prediction) {
-    const budget = new ExternalBudget();
+    const budget = phaseBudget(deps);
     const models = await loadModels(deps.kv, deps.config.defaultModel);
     const coursePrompt = await loadPrompt(deps.kv, "course");
     const racePrompt = await loadPrompt(deps.kv, "race");
@@ -544,12 +570,23 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       runner_stats: runner.text,
       win_odds: renderWinOddsText(state.entries, state.odds),
     });
+    const relatedCourses: StoredRelatedCourses = {
+      status: strippedCourse.parse.status,
+      courses: strippedCourse.parse.status === "ok" ? strippedCourse.parse.courses : [],
+      dropped: strippedCourse.parse.dropped,
+      line: renderRelatedCoursesLine(related),
+    };
     const stored = await savePredictInput(deps.kv, {
       raceKey: state.race.raceKey,
       runId: state.runId,
       umabashira,
       raceInput,
       horses: snapshots,
+      savedAt: deps.now().toISOString(),
+      pastRuns,
+      courseRecords,
+      relatedCourses,
+      runnerStats: runner.text,
     });
     state.predictInput = { stored: true, ...stored };
     const race = await generateText({
@@ -697,8 +734,9 @@ async function loadRunnerStats(
 }
 
 async function runNotion(state: JobState, deps: PipelineDeps): Promise<void> {
+  clearRetry(state);
   if (!state.prediction || !state.odds) throw new JobError("予想結果が無いため Notion に書けません", false);
-  const budget = new ExternalBudget(deps.externalBudget ?? EXTERNAL_BUDGET);
+  const budget = phaseBudget(deps);
   const token = deps.config.notionToken;
   const databaseId = deps.config.notionDatabaseId;
   const raceName = state.raceRow ? stringField(state.raceRow, "race_name_main") : null;
@@ -991,7 +1029,11 @@ async function notionOk(
 function notionStatus(status: number, body: unknown): JobError {
   const message =
     body && typeof body === "object" && "message" in body ? String((body as { message: unknown }).message) : "";
-  return new JobError(`Notion HTTP ${status}${message ? `: ${message}` : ""}`, status === 429 || status >= 500);
+  return new JobError(
+    `Notion HTTP ${status}${message ? `: ${message}` : ""}`,
+    status === 429 || status >= 500,
+    status,
+  );
 }
 
 async function call(deps: PipelineDeps, name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -1041,21 +1083,52 @@ async function continueNotionLater(message: JobMessage, deps: PipelineDeps, err:
   return true;
 }
 
+interface FailureRecord {
+  saved: boolean;
+  /** phase=error を書いた。このときだけ通知する。 */
+  finalized: boolean;
+  phaseAtFailure: string | null;
+}
+
+function phaseBudget(deps: PipelineDeps): ExternalBudget {
+  return deps.budget ?? new ExternalBudget(deps.externalBudget ?? EXTERNAL_BUDGET);
+}
+
+function clearRetry(state: JobState): void {
+  if (state.retry) delete state.retry;
+}
+
+function retryMark(text: string, delivery: Delivery | undefined): JobRetry {
+  return {
+    attempt: delivery?.attempt ?? 1,
+    maxAttempts: delivery?.maxRetries ?? QUEUE_MAX_RETRIES,
+    lastError: text,
+  };
+}
+
 /** 失敗理由をジョブに残す。保存自体が失敗しても投げず、元のエラーを隠さない。 */
-async function persistFailure(message: JobMessage, deps: PipelineDeps, err: unknown, retry: boolean): Promise<boolean> {
+async function persistFailure(
+  message: JobMessage,
+  deps: PipelineDeps,
+  err: unknown,
+  retry: boolean,
+  delivery: Delivery | undefined,
+): Promise<FailureRecord> {
   const text = errorMessage(err);
+  const missed: FailureRecord = { saved: false, finalized: false, phaseAtFailure: null };
   try {
     const raceKey = raceKeyOf(message);
     const state = await loadJob(deps.kv, raceKey);
     const updatedAt = deps.now().toISOString();
     if (!state || (message.kind === "start" && state.runId !== message.runId)) {
-      if (message.kind !== "start") return true;
+      if (message.kind !== "start") return { saved: true, finalized: false, phaseAtFailure: null };
       await commitJob(deps, {
         runId: message.runId,
         race: message.race,
         requestedBy: message.requestedBy,
         phase: retry ? "collect" : "error",
         error: retry ? undefined : text,
+        retry: retry ? retryMark(text, delivery) : undefined,
         remarks: message.remarks?.trim() ?? "",
         baba: null,
         raceRow: null,
@@ -1068,25 +1141,31 @@ async function persistFailure(message: JobMessage, deps: PipelineDeps, err: unkn
         notionPageId: null,
         updatedAt,
       });
-      return true;
+      return { saved: true, finalized: !retry, phaseAtFailure: retry ? null : "collect" };
     }
-    if (state.runId !== runIdOf(message)) return true;
-    // 再試行中で進捗はもう書いてある。同じキーを直後に上書きしない。
-    if (retry && writer(deps).hasWritten()) return true;
+    if (state.runId !== runIdOf(message)) return { saved: true, finalized: false, phaseAtFailure: null };
+    if (state.phase === "done" || state.phase === "error") {
+      return { saved: true, finalized: false, phaseAtFailure: null };
+    }
+    const phaseAtFailure = state.phase;
     state.updatedAt = updatedAt;
-    if (!retry) {
+    if (retry) {
+      state.error = undefined;
+      state.retry = retryMark(text, delivery);
+    } else {
       state.phase = "error";
       state.error = text;
+      clearRetry(state);
     }
     await commitJob(deps, state);
-    return true;
+    return { saved: true, finalized: !retry, phaseAtFailure: retry ? null : phaseAtFailure };
   } catch (saveErr) {
     deps.log?.("job_persist_failed", {
       raceKey: raceKeyOf(message),
       error: text,
       saveError: errorMessage(saveErr),
     });
-    return false;
+    return missed;
   }
 }
 

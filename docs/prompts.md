@@ -91,7 +91,7 @@ user 文の差し込みは次の名前です。置換したあとに `{{` が残
 
 ## 過去走（`{{past_runs}}`）
 
-`{{past_runs}}` を user にまだ書いていない KV でも、ジョブは進みます。そのときは `{{race_facts}}` の次、ユーザー文の先頭側に足します。user に `{{past_runs}}` があるときは、そこだけに入り、先頭には足しません。
+`{{past_runs}}` を user にまだ書いていない KV でも、ジョブは進みます。そのときは `{{race_facts}}` の次、ユーザー文の先頭側に足します。user に `{{past_runs}}` があるときは、そこだけに入り、先頭には足しません。二次予想がこの表と `{{course_records}}` と `{{runner_stats}}` だけを読む入口は、[admin.md](admin.md) の `include=past_runs` です。プロンプト本文は返しません。
 
 本文は `# 過去走（近10走）` で始まり、馬は馬番の順です。見出しは `### 馬番 馬名` です。取消・除外の馬は出しません。同名で近走を特定できない馬は `同名馬のため近走取得不可` だけです。走が無い馬は `近走なし` です。
 
@@ -151,7 +151,7 @@ Worker はこのブロックを読んでから、`{{course_analysis}}` と Notio
 
 見出しの近くに `scope` を書きます。2026-11-08 に同じ条件で `get_stats` を呼ぶと、`scope` は `jra_and_non_jra` でした。競馬場名で絞っているので、地方の同名場（別の名前）は入りません。`scope` がこれと違うとき、または応答に `scope` が無いときは、`raceInputGaps` に残します。件数は、読めればそのまま渡します。
 
-`GET /admin/inspect` のレース予想のユーザー文と、`GET /admin/jobs/input` の `race_input` に、この本文が入ります。欠けは `race_input_gaps` です。
+`GET /admin/inspect` のレース予想のユーザー文と、`GET /admin/jobs/input` の `race_input` に、この本文が入ります。`include=past_runs` は、プロンプト文を除いたこの節だけを `runner_stats` で返します。欠けは `race_input_gaps` です。
 
 プロンプト側（非公開リポジトリ `hidesuke/jra-bashira-prompts` のレース予想 user）に足すもの:
 

@@ -3,7 +3,8 @@ import type { ConsistencyWarning } from "./consistency";
 import { horseFormSnapshots, type HorseFormSnapshot } from "./form";
 import type { CourseGeminiCall, GeminiCallRecord, GeminiUsageMetadata } from "./gemini";
 import { handleInspect } from "./inspect";
-import { loadJob } from "./job";
+import { pastRunsSnapshotFields } from "./input-sections";
+import { jobRetryView, loadJob } from "./job";
 import { keys } from "./kv";
 import { loadPredictInput } from "./predict-input";
 import {
@@ -233,11 +234,16 @@ async function getJob(url: URL, deps: HttpDeps): Promise<Response> {
   if (!raceKey) throw new JobError("race_key を指定してください", false);
   const state = await loadJob(deps.kv, raceKey);
   if (!state) return json({ error: "ジョブがありません", race_key: raceKey }, 404);
+  const retry = jobRetryView(state.retry);
   return json({
     race_key: state.race.raceKey,
     run_id: state.runId,
     phase: state.phase,
     error: state.error ?? null,
+    retry: retry.retry,
+    attempt: retry.attempt,
+    max_attempts: retry.max_attempts,
+    last_error: retry.last_error,
     requested_by: state.requestedBy,
     notion_page_id: state.notionPageId,
     course_variant: state.courseVariant,
@@ -294,6 +300,7 @@ async function getJobInput(url: URL, deps: HttpDeps): Promise<Response> {
   };
   if (include.has("umabashira")) body.umabashira = stored?.umabashira ?? null;
   if (include.has("input")) body.race_input = stored?.raceInput ?? null;
+  if (include.has("past_runs")) Object.assign(body, pastRunsSnapshotFields(stored));
   return json(body);
 }
 

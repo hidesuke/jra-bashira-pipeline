@@ -98,6 +98,39 @@ const PAST_RUN_HEADER = [
   "後半3F",
 ];
 
+/** 一次予想へ渡す近10走の見出し。抽出もこの文字列だけを許可する。 */
+export const PAST_RUNS_TITLE = "# 過去走（近10走）";
+export const PAST_RUNS_INTRO =
+  "各馬最大10走。今回のレースと upcoming、開催日より未来の走は除く。人気と単勝は過去のレースの値。前半3Fと後半3Fはそのレース全体の秒。上り3Fは馬の上がり。空欄は値が無い。乗替はあり／なし。";
+export const COURSE_RECORDS_TITLE = "# コース成績";
+export const COURSE_RECORDS_INTRO =
+  "表記は (1着,2着,3着,4着,5着,それ以外)。同じコースは競馬場・芝かダート・距離が同じ。同じ競馬場は競馬場と芝かダートが同じ。関連コースは一覧の合算。内回り・外回りは区別しない。着順の付かない走（取消・除外・中止・失格）は数えない。";
+export const RELATED_COURSES_UNREADABLE_LINE = "関連コース: 一覧が読めないため空欄";
+export const RELATED_COURSES_NONE_LINE = "関連コース: なし";
+export const PAST_RUN_UNRESOLVED = "同名馬のため近走取得不可";
+export const PAST_RUN_NONE = "近走なし";
+export const COURSE_RECORD_UNRESOLVED = "同名馬のため成績を数えない";
+export const COURSE_SAME_EMPTY = "同じコース: ";
+export const COURSE_TRACK_EMPTY = "同じ競馬場: ";
+export const COURSE_RELATED_EMPTY = "関連コース: ";
+
+export function pastRunHeaderLine(): string {
+  return `| ${PAST_RUN_HEADER.join(" | ")} |`;
+}
+
+export function pastRunRuleLine(): string {
+  return `| ${PAST_RUN_HEADER.map(() => "---").join(" | ")} |`;
+}
+
+export const PAST_RUN_COLUMN_COUNT = PAST_RUN_HEADER.length;
+
+/** コース成績の先頭に書く関連コースの行。null は一覧が読めない。 */
+export function renderRelatedCoursesLine(related: CourseSpec[] | null): string {
+  if (related == null) return RELATED_COURSES_UNREADABLE_LINE;
+  if (related.length === 0) return RELATED_COURSES_NONE_LINE;
+  return `関連コース: ${related.map((course) => `${course.track},${course.surface},${course.distance}`).join(" / ")}`;
+}
+
 export interface CareerHorse {
   horseName: string;
   /** 同名を生年で解決したあとの名前。未解決の馬は問い合わせに使わない。 */
@@ -302,10 +335,7 @@ export function renderPastRuns(input: {
   rows: Record<string, unknown>[];
   paces: Map<string, RacePace>;
 }): string {
-  const lines = [
-    "# 過去走（近10走）",
-    "各馬最大10走。今回のレースと upcoming、開催日より未来の走は除く。人気と単勝は過去のレースの値。前半3Fと後半3Fはそのレース全体の秒。上り3Fは馬の上がり。空欄は値が無い。乗替はあり／なし。",
-  ];
+  const lines = [PAST_RUNS_TITLE, PAST_RUNS_INTRO];
   for (const horse of input.horses) {
     lines.push("", horseHeading(horse), renderHorsePastRuns(input.race, horse, input.rows, input.paces));
   }
@@ -320,15 +350,11 @@ export function renderCourseRecords(input: {
   /** null は一覧が読めない。空配列は関連コースが無い。 */
   related: CourseSpec[] | null;
 }): string {
-  const lines = [
-    "# コース成績",
-    "表記は (1着,2着,3着,4着,5着,それ以外)。同じコースは競馬場・芝かダート・距離が同じ。同じ競馬場は競馬場と芝かダートが同じ。関連コースは一覧の合算。内回り・外回りは区別しない。着順の付かない走（取消・除外・中止・失格）は数えない。",
-    relatedLine(input.related),
-  ];
+  const lines = [COURSE_RECORDS_TITLE, COURSE_RECORDS_INTRO, renderRelatedCoursesLine(input.related)];
   for (const horse of input.horses) {
     lines.push("", horseHeading(horse));
     if (horse.unresolved) {
-      lines.push("同名馬のため成績を数えない", "同じコース: ", "同じ競馬場: ", "関連コース: ");
+      lines.push(COURSE_RECORD_UNRESOLVED, COURSE_SAME_EMPTY, COURSE_TRACK_EMPTY, COURSE_RELATED_EMPTY);
       continue;
     }
     const mine = input.rows.filter((row) => matchesHorse(row, horse));
@@ -409,12 +435,10 @@ async function fetchPaces(
 }
 
 function renderHorsePastRuns(race: RaceRef, horse: CareerHorse, rows: Record<string, unknown>[], paces: Map<string, RacePace>): string {
-  if (horse.unresolved) return "同名馬のため近走取得不可";
+  if (horse.unresolved) return PAST_RUN_UNRESOLVED;
   const runs = selectPastRuns(rows, race, horse.horseName, horse.queryName);
-  if (runs.length === 0) return "近走なし";
-  const header = `| ${PAST_RUN_HEADER.join(" | ")} |`;
-  const rule = `| ${PAST_RUN_HEADER.map(() => "---").join(" | ")} |`;
-  return [header, rule, ...runs.map((row) => pastRunRow(row, paces))].join("\n");
+  if (runs.length === 0) return PAST_RUN_NONE;
+  return [pastRunHeaderLine(), pastRunRuleLine(), ...runs.map((row) => pastRunRow(row, paces))].join("\n");
 }
 
 function pastRunRow(row: Record<string, unknown>, paces: Map<string, RacePace>): string {
@@ -471,12 +495,6 @@ function onRelated(row: Record<string, unknown>, related: CourseSpec[]): boolean
   const distance = numberField(row, "distance");
   if (!track || !surface || distance == null) return false;
   return related.some((course) => course.track === track && course.surface === surface && course.distance === distance);
-}
-
-function relatedLine(related: CourseSpec[] | null): string {
-  if (related == null) return "関連コース: 一覧が読めないため空欄";
-  if (related.length === 0) return "関連コース: なし";
-  return `関連コース: ${related.map((course) => `${course.track},${course.surface},${course.distance}`).join(" / ")}`;
 }
 
 function matchesHorse(row: Record<string, unknown>, horse: CareerHorse): boolean {

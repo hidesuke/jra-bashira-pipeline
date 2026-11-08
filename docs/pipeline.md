@@ -39,7 +39,7 @@ predict のこの取得は、コース分析のあと、レース予想の前で
 
 そのあと、同じ配送で出走馬のコース成績（`{{runner_stats}}`）を作ります。父と母の父は、名前を配列にして `get_stats` を 1 回ずつ呼びます。`name_resolution` が曖昧な名前は、問い合わせた名前に生年を足した候補がちょうど 1 件のときだけ、その名前で 1 回だけ指定し直します。候補が複数のときは決め打ちせず、その名前は欠けにします。騎手は配列にできないので 1 人ずつです。結果は KV に、コース（競馬場、芝かダート、距離、期間）× 騎手 × `data_version` で 7 日置きます。同じ日の別レースはこれを読み、無いときだけその場で取ります。`data_version` は、先に取る父か母の父の応答から読みます。期間をキーに入れるのは、同じ `data_version` でもレース日が違うと終点が 1 日ずれるためです。
 
-この取得は予想を止めません。失敗、名前が見つからない、同名、呼び出し上限で切った分は、`raceInputGaps` に残し、取れた行だけ渡します。取れない値は 0 件にしません。解決できた名前で行が無いときだけ、出走 0 です。1 配送の `get_stats` は `RUNNER_STATS_CALL_LIMIT`（24）までです。内訳は、父 1、母の父 1、それぞれの再指定 1、騎手 18、騎手の再指定 2 です。Durable Object の 1 呼び出しには、既存の集計と同じく 8 件までまとめます。
+この取得は予想を止めません。失敗、名前が見つからない、同名、呼び出し上限で切った分は、`raceInputGaps` に残し、取れた行だけ渡します。取れない値は 0 件にしません。解決できた名前で行が無いときだけ、出走 0 です。本文は近10走・コース成績と同じく `input:v1:{raceKey}` の別フィールドに置き、`GET /admin/jobs/input?include=past_runs` の `runner_stats` で返します。プロンプト文は返しません。別フィールドが無い保存は、ユーザー文から `# 出走馬のコース成績` だけを切り出します。1 配送の `get_stats` は `RUNNER_STATS_CALL_LIMIT`（24）までです。内訳は、父 1、母の父 1、それぞれの再指定 1、騎手 18、騎手の再指定 2 です。Durable Object の 1 呼び出しには、既存の集計と同じく 8 件までまとめます。
 
 出馬表の時点で週の「コース × 騎手」を別キューで先に取る仕組みは、入れていません。Notion 段の外部 45 は別の配送で、predict の BASHIRA はその 45 に数えません。上の 24 回を、コース要約、通算、ペース、Gemini 2 回と足しても、Durable Object への呼び出しを外部 50 に数える仮定で 50 未満です。同じコースの 2 レース目以降は騎手の呼び出しが 0 です。先に別メッセージへ分けると、予想が保存される前の再試行で Gemini をやり直す経路と組み、15 分の上限をむしろ使いやすくなります。`get_stats` を最大 24 回足しても、思考レベル `high` の Gemini より短いので、この配送に収めています。
 
@@ -77,9 +77,15 @@ predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回�
 
 待ち時間を置いているのは、同じジョブキーの KV 書き込みが 1 秒に 1 回という制限に当たらないようにするためです。ジョブの保存は、同じ配送の中では約 1.1 秒に 1 回まで間を空けます。
 
-再試行できるエラーで、配送の `attempts` が 3 未満のときは `retry` します。再試行しないエラー、または `attempts` が 3 以上のときは、失敗理由をジョブに書けたら `ack` し、`phase` を `error` にします。この経路では待ち行列へは入りません。失敗理由の保存に失敗したときは、`retry` を返します。Queue 側の再試行を使い切った配送は、`jra-bashira-race-dlq` の設定に従います。待ち行列の作り方は [operations.md](operations.md) です。
+再試行できるエラーで、配送の `attempts` が 3 未満のときは `retry` します。そのあいだ `phase` は進んでいる段階のままです（`predict` なら `predict`）。ジョブの `retry` に、失敗した配送の `attempt`、`maxAttempts`（`max_retries`）、`lastError` を残します。`GET /admin/jobs` はこれを `retrying attempt 2/3` のように返します。`error` は、再試行が終わるまで空のままです。次の配送が先へ進むと `retry` は消します。
 
-認可の失敗（未認可、`invalid_grant`、通信失敗を含む refresh 失敗）は再試行せず、ジョブを `error` にします。理由は `GET /admin/jobs` の `error` に出ます。
+再試行しないエラー、または `attempts` が 3 以上のときは、失敗理由をジョブに書けたら `ack` し、`phase` を `error` にします。この経路では待ち行列へは入りません。失敗理由の保存に失敗したときは、`retry` を返します。Queue 側の再試行を使い切った配送は、`jra-bashira-race-dlq` の設定に従います。待ち行列の作り方は [operations.md](operations.md) です。
+
+`phase` を `error` に書けたときだけ、任意の Webhook へ POST します。`NOTIFY_WEBHOOK_URL` が未設定なら送りません。本文は JSON で、`type` は `race_failed` です。入るのは `race_key`、`run_id`、失敗したときの `phase_at_failure`、短い `error`、`attempts`、分かれば `http_status`、`inspect_path`（`/admin/inspect?race_key=...`）、`jobs_path`（`/admin/jobs?race_key=...`）、`occurred_at_jst` です。キーは Secret `NOTIFY_WEBHOOK_KEY` です。ヘッダー名は平文の `NOTIFY_WEBHOOK_KEY_HEADER` で、未設定なら `Authorization: Bearer <key>` です。`Authorization` という名前は大文字小文字を問いません。別の名前ならキーをそのままそのヘッダーに入れます。`Content-Type` と `Content-Length` は使いません。URL とキーはログに出しません。失敗したときは HTTP ステータスだけをログし、約 10 秒で打ち切ります。この POST は同じ配送の外部予算に 1 件数えます。ソフト上限の 45 を使い切ったあとでも、プラットフォーム上限の 50 未満なら 1 件だけ送ります。通知の失敗でジョブを `error` 以外にしたり、Queue の再試行を足したりはしません。置き方は [operations.md](operations.md) です。
+
+複数レースを一度に積む入口は、いまありません。`POST /run` は 1 レース、cron はレースを積みません。Queue の `max_batch_size` は配送の件数で、レースの束ではありません。そのため `batch_completed` は送りません。後から複数レースを積むときは、積む時点で batch id を付け、終了と失敗の件数をその id でまとめてから 1 回送る必要があります。
+
+認可の失敗（未認可、`invalid_grant`、通信失敗を含む refresh 失敗）は再試行せず、ジョブを `error` にします。理由は `GET /admin/jobs` の `error` に出ます。このときも、上の Webhook を 1 回送ります。
 
 ## 同じレースのロック
 

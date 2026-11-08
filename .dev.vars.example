@@ -5,3 +5,9 @@ NOTION_TOKEN=
 TOKEN_ENCRYPTION_KEY=
 # Access アプリケーションの AUD タグ。プレースホルダーを実値に置き換える
 ACCESS_AUD=your-access-application-aud-tag
+# 任意。空なら通知しない。値はローカル専用。
+NOTIFY_WEBHOOK_URL=
+NOTIFY_WEBHOOK_KEY=
+# 平文。空なら Authorization。そのときは値を Bearer <NOTIFY_WEBHOOK_KEY> にする。
+# Authorization 以外の名前なら、キーをそのヘッダーへそのまま入れる。
+NOTIFY_WEBHOOK_KEY_HEADER=

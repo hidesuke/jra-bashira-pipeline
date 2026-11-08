@@ -77,6 +77,11 @@ export function stripRelatedCourses(text: string): { text: string; parse: Relate
   return { text: next, parse };
 }
 
+/** `競馬場,芝かダート,距離` の 1 行。前後の空白は除く。合わない行は null。 */
+export function courseSpecFromText(line: string): CourseSpec | null {
+  return parseCourseLine(line);
+}
+
 function parseCourseLine(line: string): CourseSpec | null {
   const parts = line.trim().split(",");
   if (parts.length !== 3) return null;

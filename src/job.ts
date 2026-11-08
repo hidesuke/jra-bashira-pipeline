@@ -26,6 +26,32 @@ export interface StoredPrediction {
   予想本文: string;
 }
 
+/** Queue が再配送するあいだ、/admin/jobs が「止まっている」ように見えないようにする。 */
+export interface JobRetry {
+  /** 失敗した配送の attempts。1 始まり。 */
+  attempt: number;
+  /** wrangler.jsonc の max_retries。 */
+  maxAttempts: number;
+  lastError: string;
+}
+
+export function jobRetryView(retry: JobRetry | undefined): {
+  retry: string | null;
+  attempt: number | null;
+  max_attempts: number | null;
+  last_error: string | null;
+} {
+  if (!retry || !Number.isInteger(retry.attempt) || !Number.isInteger(retry.maxAttempts) || retry.maxAttempts < 1) {
+    return { retry: null, attempt: null, max_attempts: null, last_error: null };
+  }
+  return {
+    retry: `retrying attempt ${retry.attempt}/${retry.maxAttempts}`,
+    attempt: retry.attempt,
+    max_attempts: retry.maxAttempts,
+    last_error: typeof retry.lastError === "string" ? retry.lastError : null,
+  };
+}
+
 export interface JobState {
   runId: string;
   race: RaceRef;
@@ -73,6 +99,11 @@ export interface JobState {
     course?: CourseGeminiCall;
     race?: GeminiCallRecord;
   };
+  /**
+   * 再試行を待っているときだけ入る。phase は進んでいる段階のまま。
+   * 最終失敗と、次の配送が先へ進んだときは消す。
+   */
+  retry?: JobRetry;
   /** 予想入力を別キーへ書いた結果。本文そのものは入れない。 */
   predictInput?: {
     stored: boolean;

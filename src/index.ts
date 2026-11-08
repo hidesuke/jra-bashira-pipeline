@@ -3,6 +3,7 @@ import { BUILD_COMMIT } from "./build-info";
 import { cronSkipReason } from "./cron";
 import { BashiraAuth } from "./bashira/auth-do";
 import { handleRequest, type HttpDeps } from "./http";
+import { notifyConfigFromEnv } from "./notify";
 import { handleJobMessage, type AppConfig, type PipelineDeps } from "./pipeline";
 import { QUEUE_MAX_RETRIES, type JobMessage } from "./types";
 
@@ -65,6 +66,7 @@ function pipelineDeps(env: Env): PipelineDeps {
       await env.RACE_QUEUE.send(message);
     },
     now: () => new Date(),
+    notify: notifyConfigFromEnv(env),
     log: (event, fields) => {
       console.log(JSON.stringify({ event, ...fields }));
     },
