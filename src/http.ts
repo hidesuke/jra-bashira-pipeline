@@ -2,6 +2,7 @@ import { identifyCaller, type Caller } from "./access";
 import type { ConsistencyWarning } from "./consistency";
 import { horseFormSnapshots, type HorseFormSnapshot } from "./form";
 import type { CourseGeminiCall, GeminiCallRecord, GeminiUsageMetadata } from "./gemini";
+import { handleInspect } from "./inspect";
 import { loadJob } from "./job";
 import { keys } from "./kv";
 import { loadPredictInput } from "./predict-input";
@@ -107,6 +108,10 @@ export async function handleRequest(request: Request, deps: HttpDeps): Promise<R
     if (url.pathname === "/admin/jobs/input" && request.method === "GET") {
       await requireCaller(request, deps);
       return await getJobInput(url, deps);
+    }
+    if (url.pathname === "/admin/inspect" && request.method === "GET") {
+      await requireCaller(request, deps);
+      return await handleInspect(url, deps.kv);
     }
     return json({ error: "not found" }, 404);
   } catch (err) {

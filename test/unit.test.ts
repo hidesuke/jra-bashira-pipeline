@@ -786,6 +786,8 @@ describe("gemini json", () => {
     expect(sent).not.toContain("temperature");
     expect(sent).not.toContain("maxOutputTokens");
     expect(result.text).toBe("本文です続き");
+    expect(result.userText).toBe("user");
+    expect(result).not.toHaveProperty("system");
     expect(result.text).not.toContain("SECRET");
     expect(result.text).not.toContain("cite-me");
     expect(result).toMatchObject({

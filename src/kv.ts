@@ -1,4 +1,4 @@
-import { JobError, type KvStore } from "./types";
+import { JobError, type KvListResult, type KvStore } from "./types";
 
 export const keys = {
   job: (raceKey: string) => `job:v1:${raceKey}`,
@@ -12,6 +12,12 @@ export const keys = {
   /** 予想に渡した馬柱とユーザー文。本文が長いときは u / r の分割キーに置く。 */
   predictInput: (raceKey: string) => `input:v1:${raceKey}`,
   predictInputChunk: (raceKey: string, part: "u" | "r", index: number) => `input:v1:${raceKey}:${part}:${index}`,
+  /**
+   * 確認用に残す LLM のユーザー文と出力全文。システムプロンプトは入れない。
+   * 長い本文は cu / co / ro の分割キーに置く。
+   */
+  llmTrace: (raceKey: string) => `trace:v1:${raceKey}`,
+  llmTraceChunk: (raceKey: string, part: "cu" | "co" | "ro", index: number) => `trace:v1:${raceKey}:${part}:${index}`,
 };
 
 export async function kvGetJson<T>(kv: KvStore, key: string): Promise<T | null> {
@@ -85,5 +91,30 @@ export class MemoryKv implements KvStore {
 
   async delete(key: string): Promise<void> {
     this.store.delete(key);
+  }
+
+  async list(options?: { prefix?: string; limit?: number; cursor?: string }): Promise<KvListResult> {
+    const prefix = options?.prefix ?? "";
+    const limit = options?.limit ?? 1000;
+    const names = [...this.store.keys()]
+      .filter((name) => name.startsWith(prefix) && this.alive(name))
+      .sort();
+    const start = options?.cursor ? Number(options.cursor) : 0;
+    const offset = Number.isInteger(start) && start > 0 ? start : 0;
+    const slice = names.slice(offset, offset + limit);
+    const next = offset + slice.length;
+    const done = next >= names.length;
+    return {
+      keys: slice.map((name) => ({ name })),
+      list_complete: done,
+      cursor: done ? undefined : String(next),
+    };
+  }
+
+  private alive(key: string): boolean {
+    const row = this.store.get(key);
+    if (!row) return false;
+    if (row.exp != null && row.exp <= this.now()) return false;
+    return true;
   }
 }

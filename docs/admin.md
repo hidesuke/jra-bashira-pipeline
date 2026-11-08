@@ -122,3 +122,58 @@ curl -sS -X POST "https://<worker>/admin/models/restore" \
 ```
 
 直前の設定が無いときは 400 です。戻す操作も履歴に残り、`restored` が付きます。戻すときはモデル一覧との再照合はしません。応答の `note` は「直前のモデル設定に戻しました。」です。
+
+## レースの確認
+
+`GET /admin/inspect` は、保存済みのジョブから、馬柱と LLM の入出力をまとめて返します。Gemini と BASHIRA は呼びません。システムプロンプト、トークン、API キーは返しません。
+
+```bash
+curl -sS "https://<worker>/admin/inspect?race_key=20261108-05-11" \
+  -H "CF-Access-Client-Id: $GROK_ACCESS_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET"
+```
+
+`race_key` の代わりに `raceKey` も受け付けます。`format` を付けないときは JSON です。人が読むときは `format=markdown` です。知らない `format` は 400 です。エラー応答は `format` に関係なく JSON です。
+
+```bash
+curl -sS "https://<worker>/admin/inspect?race_key=20261108-05-11&format=markdown" \
+  -H "CF-Access-Client-Id: $GROK_ACCESS_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET"
+```
+
+`race_key` が無く、`date` も無いときは 400 です。ジョブが無いときは 404 です。`date` は `YYYY-MM-DD` または `YYYYMMDD` です。`race_key` と `date` を同時に付けたときは、そのレースだけを返します。
+
+その日のジョブ一覧です。`phase`、`error`、`run_id`、`requested_by`、予想の有無だけを返します。本文は返しません。KV の list はすぐには揃わないことがあります。
+
+```bash
+curl -sS "https://<worker>/admin/inspect?date=2026-11-08" \
+  -H "CF-Access-Client-Id: $GROK_ACCESS_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET"
+```
+
+レース 1 件の JSON は次です。呼び出し結果の名前は `GET /admin/jobs` の `gemini` と同じです。
+
+| フィールド | 内容 |
+| --- | --- |
+| `race` | 日付、競馬場、場コード、レース番号、レース名、グレード、馬場種類、距離、天気、馬場状態 |
+| `phase` / `error` | ジョブの段階と失敗理由 |
+| `going` | 予想に使った天気、馬場状態、馬場 API にしか無い詳細 |
+| `baba` / `race_row` / `remarks` / `odds` | 保存されている入力。秘密情報のキーは落とす |
+| `umabashira` | LLM に渡した馬柱。未保存なら null |
+| `course.user_text` / `course.prompt_version` | コース分析のユーザー文とプロンプト版 |
+| `course.output_text` | コース分析の全文。Notion で切り詰める前 |
+| `race_prediction.user_text` / `race_prediction.prompt_version` | レース予想のユーザー文とプロンプト版 |
+| `race_prediction.output_text` | レース予想のモデル出力全文 |
+| `race_prediction.予想本文` | 保存した予想本文。見出しから読んだあとの本文 |
+| `finishReason` / `modelVersion` / `usageMetadata` | 呼び出しごと |
+| `webSearchQueries` | コース分析はジョブの記録。レース予想は `trace:v1:{raceKey}` に残したクエリ。未記録は null |
+| `course_summary` / `course_summary_error` | ジョブに `courseSummary`（または同名のスネークケース）があるときだけ。無いジョブでは両方 null |
+| `warnings` | 整合性チェックの警告。Notion には書かない |
+
+`course_summary` は、ジョブ KV にそのフィールドが無い古い実行では null です。エンドポイントは要約の計算をしません。
+
+Markdown は上の項目を見出しで区切り、本文は省略しません。保存が無い項目は「保存されていません」と書きます。
+
+馬柱とレース予想のユーザー文は `input:v1:{raceKey}`、コース分析のユーザー文と両方の出力全文は `trace:v1:{raceKey}` です。どちらも 10 万文字で分割し、1 項目 50 万文字で切ります。切ったときは `truncated` が true です。分割の一部が読めないときは `incomplete` が true です。この変更より前のジョブは、コース分析のユーザー文が無いことがあります。出力は、予想まで終わっていれば `prediction` に残っている全文を返します。
+
+馬ごとの解決結果は [このファイルの予想入力](#予想に渡した入力) の `GET /admin/jobs/input` です。コース集計のキャッシュは返しません。
