@@ -130,7 +130,7 @@ user 文の差し込みは次の名前です。置換したあとに `{{` が残
 
 | 差し込み | 入るもの | 出典 | 移行中の Dify トークン |
 | --- | --- | --- | --- |
-| `{{umabashira}}` | 馬柱。近走は最大 10 走 | BASHIRA `get_entries`。馬名ごとに `race_meeting_date` 降順で最大 12 行取り、今回のレースと `upcoming` を除いた残り | `{{#1788721223615.output#}}` |
+| `{{umabashira}}` | 馬柱。近走は最大 10 走 | BASHIRA `get_entries`。馬名ごとに `race_meeting_date` 降順で最大 12 行取り、今回のレースと `upcoming` を除いた残り。同名で `name_resolution.status` が `ambiguous` のときは、出馬表の `birth_date` の年と一致する「名 (YYYY)」で 1 回だけ引き直す。それでも決まらなければ近走なしとは書かず、「同名馬のため近走取得不可」と通算出走数・前走着順・前走距離・前走馬場・間隔を書く | `{{#1788721223615.output#}}` |
 | `{{course_analysis}}` | コース分析の本文 | 第 1 段階（course）の出力 | `{{#1788721380442.output#}}` |
 | `{{weather}}` | 天気。どちらも無いときは「不明」 | baba API（`/baba/latest`）を土台にし、BASHIRA `get_races` の `weather` で上書き | `{{#1788103991048.weathre#}}` |
 | `{{condition}}` | 馬場状態。どちらも無いときは「不明」 | baba API の芝/ダート区分を土台にし、BASHIRA `get_races` の `track_condition` で上書き | `{{#1788103991048.condition#}}` |
@@ -230,6 +230,18 @@ curl -sS "https://<worker>/admin/jobs?race_key=20261107-03-11" \
 
 `phase` が `error` のとき `error` に理由が入ります。refresh 失敗はここに出ます。
 
+予想に渡した馬柱と、馬ごとの解決結果:
+
+```bash
+curl -sS "https://<worker>/admin/jobs/input?race_key=20261108-05-11" \
+  -H "CF-Access-Client-Id: $GROK_ACCESS_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET"
+```
+
+`/admin/jobs` と同じ Access JWT が必要です。`horses` は馬名・解決後の名前・`resolution_status`（`unique` / `resolved_by_birth_year` / `unresolved`）・近走数・出馬表の通算出走数、前走着順、前走距離、前走馬場、間隔、今回斤量です。`warnings` は生成後の本文と成績の食い違い（`目黒記念` のようなレース名に続く着順、`今回斤量 57 kg`）で、Notion の本文には書きません。警告があっても公開は止めません。
+
+クエリを付けないときは `umabashira`（馬柱そのもの）と `race_input`（レース予想に渡したユーザー文）も返します。`include=umabashira` は馬柱だけ、`include=input` はユーザー文だけです。本文は KV `input:v1:{raceKey}` にあり、長いときは 10 万文字ごとに分割します（値の上限 25MiB より手前で、50 万文字を超える分は切ります）。
+
 ## Notion
 
 データベース id は `3c57c7b2e419808ba999e9c1909fa39c` です。スキーマは変更しません。実行時にプロパティ型を読み、想定と違うときは書かずに止まります。セレクトに無い競馬場・レース番号も、新しい選択肢を作らずに止まります。
@@ -299,12 +311,12 @@ BASHIRA・Gemini・Notion はモックです。実 API へのデプロイや書�
 - 接続済み BASHIRA ツールの引数スキーマ（`get_races` / `get_entries` / `get_odds` / `get_stats`）。実行時も `tools/list` で同じ確認をします
 - 馬場 API の JSON（`fetchedAt` と `venues[]`）
 - Notion データベースのプロパティ型と選択肢
+- `get_entries` の `name_resolution`。同名は `status: "ambiguous"` と `candidates[].name`（`マイネルエンペラー (2020)`）、`starts`、`period`。一意な馬は `status: "resolved"`。生年付きの名前を指定し直すと行が返る
 
 確認できていないこと:
 
 - ブラウザでの認可コード交換、refresh の実寿命、refresh token のローテーション有無
 - Worker からの `tools/list` と `tools/call` の実レスポンス。`columns` / `rows` が配列のときとオブジェクトのときの両方を読む
-- `name_resolution` の実 JSON。候補配列が複数で未解決のときだけ曖昧として止める
 - Gemini の `models.list` と `generateContent` の実応答。`modelVersion` が無いときはその旨を本文に書く
 - Notion への作成・更新
 - Cloudflare 上での Queue、Durable Object、Access JWT、50 サブリクエスト上限

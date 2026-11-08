@@ -4,7 +4,8 @@ import { chunkChildren } from "./notion-blocks";
 import { ExternalBudget } from "./budget";
 import { composeRemarks, fillCourseUser, fillRaceUser, mergeGoing } from "./dify-input";
 import { readRacePrediction } from "./extract-prediction";
-import { buildFormTasks, FORM_BATCH_SIZE, selectPastRuns } from "./form";
+import { checkPredictionConsistency } from "./consistency";
+import { buildFormTasks, finishQualifiedFetch, FORM_BATCH_SIZE, FORM_FETCH_LIMIT, horseFormSnapshots, planFormFetch, type FormTask } from "./form";
 import { generateText } from "./gemini";
 import { JobWriter, loadJob, type JobState } from "./job";
 import { keys, sleepMs } from "./kv";
@@ -23,6 +24,7 @@ import { interpretOdds } from "./odds";
 import { loadPrompt } from "./prompts";
 import { numberField, rowsToObjects, stringField } from "./rows";
 import { ambiguousNameMessage } from "./bashira/mcp";
+import { savePredictInput } from "./predict-input";
 import { renderUmabashira } from "./umabashira";
 import type { BashiraPort } from "./bashira/port";
 import { assertFields, assertToolArgs, catalogFromTools } from "./schema";
@@ -116,6 +118,12 @@ const ENTRY_COLUMNS = [
   "odds_observed_at",
   "race_abnormality",
   "entry_status",
+  "birth_date",
+  "career_starts",
+  "prev_official_result",
+  "prev_distance",
+  "prev_surface",
+  "days_since_last_race",
 ];
 
 const SCRATCHED = new Set(["出走取消", "発走除外", "競走除外"]);
@@ -330,40 +338,65 @@ async function runForm(state: JobState, deps: PipelineDeps): Promise<void> {
     return;
   }
   const batch = pending.slice(0, FORM_BATCH_SIZE);
+  let calls = 0;
+  let heldForBudget = false;
   for (const task of batch) {
-    const result = await deps.bashira.callTool("get_entries", task.args);
-    if (!result.ok) {
-      state.updatedAt = deps.now().toISOString();
-      try {
-        await commitJob(deps, state);
-      } catch (saveErr) {
-        deps.log?.("job_checkpoint_failed", {
-          raceKey: state.race.raceKey,
-          error: result.message,
-          saveError: errorMessage(saveErr),
-        });
-      }
-      throw toolError(result);
+    if (calls >= FORM_FETCH_LIMIT) {
+      heldForBudget = true;
+      break;
     }
-    const ambiguity = ambiguousNameMessage(result.data);
-    if (ambiguity) {
-      task.status = "done";
-      task.rows = [];
-      task.note = `${ambiguity}。この馬の近走は空にします`;
-    } else {
-      task.rows = selectPastRuns(rowsToObjects(result.data), state.race, task.horseName);
-      task.status = "done";
-      if (result.data && typeof result.data === "object" && (result.data as { truncated?: unknown }).truncated === true) {
-        task.note = "近走の取得が打ち切られました";
+    calls += 1;
+    const result = await deps.bashira.callTool("get_entries", task.args);
+    if (!result.ok) throw await failFormCall(state, deps, result);
+    const step = planFormFetch(task, result.data, state.race);
+    if (step.kind === "requery") {
+      if (calls >= FORM_FETCH_LIMIT) {
+        heldForBudget = true;
+        break;
       }
+      calls += 1;
+      const again = await deps.bashira.callTool("get_entries", step.args);
+      if (!again.ok) throw await failFormCall(state, deps, again);
+      assignFormTask(task, finishQualifiedFetch(task, again.data, state.race, step.qualifiedName, step.candidates));
+    } else {
+      assignFormTask(task, step.task);
     }
     state.updatedAt = deps.now().toISOString();
     await checkpoint(deps, state);
+  }
+  if (heldForBudget) {
+    deps.log?.("form_fetch_budget", { raceKey: state.race.raceKey, calls, limit: FORM_FETCH_LIMIT });
   }
   state.phase = tasks.some((task) => task.status === "pending") ? "form" : phaseAfterForm(state);
   state.updatedAt = deps.now().toISOString();
   await commitJob(deps, state);
   await enqueuePhase(state, deps);
+}
+
+async function failFormCall(
+  state: JobState,
+  deps: PipelineDeps,
+  result: { message: string; retryable: boolean; code: string },
+): Promise<never> {
+  state.updatedAt = deps.now().toISOString();
+  try {
+    await commitJob(deps, state);
+  } catch (saveErr) {
+    deps.log?.("job_checkpoint_failed", {
+      raceKey: state.race.raceKey,
+      error: result.message,
+      saveError: errorMessage(saveErr),
+    });
+  }
+  throw toolError(result);
+}
+
+function assignFormTask(target: FormTask, next: FormTask): void {
+  target.status = next.status;
+  target.rows = next.rows;
+  target.note = next.note;
+  target.resolution = next.resolution;
+  if (next.facts) target.facts = next.facts;
 }
 
 function phaseAfterForm(state: JobState): JobState["phase"] {
@@ -421,20 +454,40 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
         distance: distance == null ? "不明" : String(distance),
       }),
     });
+    const umabashira = renderUmabashira({ race: state.race, entries: state.entries, formTasks: state.formTasks ?? [] });
+    const snapshots = horseFormSnapshots(state.entries, state.formTasks ?? []);
+    const raceInput = fillRaceUser(racePrompt.user, {
+      umabashira,
+      course_analysis: course.text,
+      weather: going.weather,
+      condition: going.condition,
+      remarks: composeRemarks(state.remarks ?? "", going.babaDetail, state.race),
+    });
+    const stored = await savePredictInput(deps.kv, {
+      raceKey: state.race.raceKey,
+      runId: state.runId,
+      umabashira,
+      raceInput,
+      horses: snapshots,
+    });
+    state.predictInput = { stored: true, ...stored };
     const race = await generateText({
       apiKey: deps.config.geminiApiKey,
       model: models.config.race,
       budget,
       fetcher: deps.fetch,
       system: racePrompt.system,
-      prompt: fillRaceUser(racePrompt.user, {
-        umabashira: renderUmabashira({ race: state.race, entries: state.entries, formTasks: state.formTasks ?? [] }),
-        course_analysis: course.text,
-        weather: going.weather,
-        condition: going.condition,
-        remarks: composeRemarks(state.remarks ?? "", going.babaDetail, state.race),
-      }),
+      prompt: raceInput,
     });
+    const warnings = checkPredictionConsistency(race.text, snapshots);
+    state.consistencyWarnings = warnings;
+    if (warnings.length > 0) {
+      deps.log?.("prediction_consistency", {
+        raceKey: state.race.raceKey,
+        count: warnings.length,
+        warnings: warnings.map((warning) => warning.message),
+      });
+    }
     const fields = readRacePrediction(race.text);
     state.prediction = {
       courseText: course.text,

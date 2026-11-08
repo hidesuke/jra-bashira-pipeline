@@ -9,6 +9,9 @@ export const keys = {
   modelsHistory: "config:models:history",
   geminiModels: "cache:v2:gemini-models",
   prompt: (stage: "course" | "race") => `prompt:v2:${stage}`,
+  /** 予想に渡した馬柱とユーザー文。本文が長いときは u / r の分割キーに置く。 */
+  predictInput: (raceKey: string) => `input:v1:${raceKey}`,
+  predictInputChunk: (raceKey: string, part: "u" | "r", index: number) => `input:v1:${raceKey}:${part}:${index}`,
 };
 
 export async function kvGetJson<T>(kv: KvStore, key: string): Promise<T | null> {

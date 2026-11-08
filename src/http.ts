@@ -1,6 +1,9 @@
 import { identifyCaller, type Caller } from "./access";
+import type { ConsistencyWarning } from "./consistency";
+import { horseFormSnapshots, type HorseFormSnapshot } from "./form";
 import { loadJob } from "./job";
 import { keys } from "./kv";
+import { loadPredictInput } from "./predict-input";
 import {
   applyModelUpdate,
   assertModelsAllowed,
@@ -99,6 +102,10 @@ export async function handleRequest(request: Request, deps: HttpDeps): Promise<R
     if (url.pathname === "/admin/jobs" && request.method === "GET") {
       await requireCaller(request, deps);
       return await getJob(url, deps);
+    }
+    if (url.pathname === "/admin/jobs/input" && request.method === "GET") {
+      await requireCaller(request, deps);
+      return await getJobInput(url, deps);
     }
     return json({ error: "not found" }, 404);
   } catch (err) {
@@ -237,6 +244,79 @@ async function getJob(url: URL, deps: HttpDeps): Promise<Response> {
         }
       : null,
   });
+}
+
+async function getJobInput(url: URL, deps: HttpDeps): Promise<Response> {
+  const raceKey = url.searchParams.get("race_key");
+  if (!raceKey) throw new JobError("race_key を指定してください", false);
+  const state = await loadJob(deps.kv, raceKey);
+  if (!state) return json({ error: "ジョブがありません", race_key: raceKey }, 404);
+  const include = includeParts(url);
+  const stored = await loadPredictInput(deps.kv, raceKey);
+  const horses = stored?.horses?.length ? stored.horses : horseFormSnapshots(state.entries ?? [], state.formTasks ?? []);
+  const warnings = state.consistencyWarnings ?? [];
+  const body: Record<string, unknown> = {
+    race_key: state.race.raceKey,
+    run_id: state.runId,
+    phase: state.phase,
+    checked: Array.isArray(state.consistencyWarnings),
+    stored: Boolean(stored),
+    truncated: Boolean(stored?.truncated),
+    incomplete: Boolean(stored?.incomplete),
+    umabashira_bytes: state.predictInput?.umabashiraBytes ?? null,
+    race_input_bytes: state.predictInput?.raceInputBytes ?? null,
+    warnings: warnings.map(warningJson),
+    horses: horses.map(horseJson),
+  };
+  if (include.has("umabashira")) body.umabashira = stored?.umabashira ?? null;
+  if (include.has("input")) body.race_input = stored?.raceInput ?? null;
+  return json(body);
+}
+
+function includeParts(url: URL): Set<string> {
+  const raw = url.searchParams.get("include");
+  if (raw == null || raw.trim() === "") return new Set(["umabashira", "input"]);
+  return new Set(
+    raw
+      .split(",")
+      .map((part) => part.trim())
+      .filter((part) => part !== ""),
+  );
+}
+
+function warningJson(warning: ConsistencyWarning): Record<string, unknown> {
+  return {
+    horse_name: warning.horseName,
+    kind: warning.kind,
+    message: warning.message,
+    race_name: warning.raceName ?? null,
+    claimed: warning.claimed,
+    actual: warning.actual,
+  };
+}
+
+function horseJson(horse: HorseFormSnapshot): Record<string, unknown> {
+  return {
+    horse_name: horse.horseName,
+    horse_number: horse.horseNumber,
+    resolved_name: horse.resolvedName,
+    resolution_status: horse.resolutionStatus,
+    past_run_count: horse.pastRunCount,
+    birth_date: horse.birthDate,
+    career_starts: horse.careerStarts,
+    prev_official_result: horse.prevOfficialResult,
+    prev_distance: horse.prevDistance,
+    prev_surface: horse.prevSurface,
+    days_since_last_race: horse.daysSinceLastRace,
+    weight_to_carry_kg: horse.weightToCarryKg,
+    past_runs: horse.pastRuns.map((run) => ({
+      race_name: run.raceName,
+      date: run.date,
+      official_result: run.officialResult,
+      surface: run.surface,
+      distance: run.distance,
+    })),
+  };
 }
 
 async function oauthCallback(url: URL, deps: HttpDeps): Promise<Response> {

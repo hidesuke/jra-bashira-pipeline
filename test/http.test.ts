@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { handleRequest, type HttpDeps } from "../src/http";
+import type { JobState } from "../src/job";
 import { keys, MemoryKv } from "../src/kv";
+import { savePredictInput } from "../src/predict-input";
 import type { JobMessage } from "../src/types";
 
 const config = {
@@ -160,5 +162,86 @@ describe("http", () => {
     expect(body).not.toContain(secret);
     expect(body).not.toContain("courseText");
     expect(body).toContain("prompt:v2:course");
+  });
+
+  it("returns stored predict input only behind Access", async () => {
+    const { http, kv } = deps();
+    const open = await handleRequest(new Request("https://worker.example/admin/jobs/input?race_key=20261108-05-11"), http);
+    expect(open.status).toBe(403);
+    const race = {
+      raceKey: "20261108-05-11",
+      raceId: "20261108-05-11",
+      date: "2026-11-08",
+      venue: "東京",
+      venueCode: "05",
+      raceNumber: 11,
+    };
+    const state: JobState = {
+      runId: "run-1",
+      race,
+      requestedBy: "Grok Bot",
+      phase: "done",
+      remarks: "",
+      baba: null,
+      raceRow: null,
+      entries: [{ horse_number: 4, horse_name: "ミラージュナイト", weight_to_carry_kg: 57 }],
+      formTasks: [],
+      odds: null,
+      courseVariant: null,
+      statTasks: [],
+      prediction: null,
+      notionPageId: null,
+      consistencyWarnings: [
+        {
+          horseName: "ミラージュナイト",
+          kind: "finish",
+          raceName: "目黒記念",
+          claimed: "2着",
+          actual: "4着",
+          message: "ミラージュナイトの目黒記念は4着だが、予想本文は2着と書いている",
+        },
+      ],
+      predictInput: { stored: true, truncated: false, umabashiraBytes: 4, raceInputBytes: 4 },
+      updatedAt: "2026-11-08T00:00:00.000Z",
+    };
+    await kv.put(keys.job(race.raceKey), JSON.stringify(state));
+    await savePredictInput(kv, {
+      raceKey: race.raceKey,
+      runId: "run-1",
+      umabashira: "馬柱BODY",
+      raceInput: "入力BODY",
+      horses: [
+        {
+          horseName: "ミラージュナイト",
+          horseNumber: 4,
+          resolvedName: "ミラージュナイト",
+          resolutionStatus: "unique",
+          pastRunCount: 1,
+          birthDate: "2022-03-30",
+          careerStarts: 12,
+          prevOfficialResult: 1,
+          prevDistance: 2600,
+          prevSurface: "芝",
+          daysSinceLastRace: 105,
+          weightToCarryKg: 57,
+          pastRuns: [{ raceName: "目黒記念", date: "2026-05-31", officialResult: 4, surface: "芝", distance: 2500 }],
+        },
+      ],
+    });
+    const listed = await handleRequest(authed("/admin/jobs/input?race_key=20261108-05-11&include=umabashira"), http);
+    expect(listed.status).toBe(200);
+    const body = (await listed.json()) as {
+      umabashira?: string;
+      race_input?: string;
+      horses: Array<{ horse_name: string; resolution_status: string; past_run_count: number; career_starts: number }>;
+      warnings: Array<{ message: string }>;
+    };
+    expect(body.umabashira).toBe("馬柱BODY");
+    expect(body.race_input).toBeUndefined();
+    expect(body.horses[0]).toMatchObject({ horse_name: "ミラージュナイト", resolution_status: "unique", past_run_count: 1, career_starts: 12 });
+    expect(body.warnings[0]?.message).toContain("2着");
+    const full = await handleRequest(authed("/admin/jobs/input?race_key=20261108-05-11"), http);
+    const fullBody = (await full.json()) as { race_input?: string };
+    expect(fullBody.race_input).toBe("入力BODY");
   });
 });
