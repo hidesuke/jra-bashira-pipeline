@@ -95,6 +95,8 @@ const STAT_FIELDS = [
   "track_condition",
   "official_result",
   "win_payout",
+  "race_meeting_date",
+  "is_fastest_last_3f",
   "dimensions",
   "metrics",
   "filters",

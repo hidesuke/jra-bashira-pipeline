@@ -11,6 +11,7 @@ interface __BaseEnv_Env {
 	STATS_PERIOD_YEARS: "5";
 	STATS_MIN_STARTS: "30";
 	STATS_BROODMARE_SIRE_MIN_STARTS: "50";
+	COURSE_SUMMARY_MIN_COUNT: "30";
 	DEFAULT_MODEL: "gemini-flash-latest";
 	ACCESS_TEAM_DOMAIN: "https://hdsk.cloudflareaccess.com";
 	ACCESS_CLIENT_ID_GROK: "";
@@ -29,7 +30,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "BASHIRA_MCP_URL" | "BABA_URL" | "NOTION_DATABASE_ID" | "STATS_PERIOD_YEARS" | "STATS_MIN_STARTS" | "STATS_BROODMARE_SIRE_MIN_STARTS" | "DEFAULT_MODEL" | "ACCESS_TEAM_DOMAIN" | "ACCESS_CLIENT_ID_GROK" | "ACCESS_CLIENT_ID_MUSE">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "BASHIRA_MCP_URL" | "BABA_URL" | "NOTION_DATABASE_ID" | "STATS_PERIOD_YEARS" | "STATS_MIN_STARTS" | "STATS_BROODMARE_SIRE_MIN_STARTS" | "COURSE_SUMMARY_MIN_COUNT" | "DEFAULT_MODEL" | "ACCESS_TEAM_DOMAIN" | "ACCESS_CLIENT_ID_GROK" | "ACCESS_CLIENT_ID_MUSE">> {}
 }
 declare module "*.txt" {
 	const value: string;

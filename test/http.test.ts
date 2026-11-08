@@ -13,6 +13,7 @@ const config = {
   statsPeriodYears: 5,
   statsMinStarts: 30,
   broodmareMinStarts: 50,
+  courseSummaryMinCount: 30,
   defaultModel: "gemini-flash-latest",
   accessTeamDomain: "https://team.cloudflareaccess.com",
   accessAud: "aud-tag",
@@ -186,6 +187,7 @@ describe("http", () => {
     expect(body).not.toContain(secret);
     expect(body).not.toContain("courseText");
     expect(body).toContain("prompt:v2:course");
+    expect(body).toContain("\"course_summary\":null");
     const listed = JSON.parse(body) as {
       gemini: {
         course: { finishReason: string; webSearchQueryCount: number; webSearchQueries: string[]; usageMetadata: { thoughtsTokenCount: number } };
@@ -205,6 +207,45 @@ describe("http", () => {
       usageMetadata: { promptTokenCount: 4, candidatesTokenCount: 5, thoughtsTokenCount: 6, totalTokenCount: 15 },
     });
     expect(listed.gemini.race.webSearchQueries).toBeUndefined();
+  });
+
+  it("returns the stored course summary without the prompt body", async () => {
+    const { http, kv } = deps();
+    await kv.put(
+      keys.job("20261107-03-11"),
+      JSON.stringify({
+        runId: "run-1",
+        race: { raceKey: "20261107-03-11" },
+        requestedBy: "Grok Bot",
+        phase: "done",
+        notionPageId: null,
+        courseVariant: null,
+        odds: null,
+        prediction: { courseText: "SECRET_PROMPT_BODY" },
+        courseSummary: {
+          status: "ok",
+          text: "コースデータ要約\n先頭: 1頭",
+          error: null,
+          periodFrom: "2021-11-06",
+          periodTo: "2026-11-06",
+          raceCount: 40,
+          raceCountTruncated: false,
+        },
+      }),
+    );
+    const job = await handleRequest(authed("/admin/jobs?race_key=20261107-03-11"), http);
+    const summary = (await job.json()) as {
+      course_summary: string;
+      course_summary_error: string | null;
+      course_summary_period: { from: string; to: string };
+      course_summary_race_count: number;
+    };
+    expect(job.status).toBe(200);
+    expect(summary.course_summary).toContain("先頭: 1頭");
+    expect(summary.course_summary_error).toBeNull();
+    expect(summary.course_summary_period).toEqual({ from: "2021-11-06", to: "2026-11-06" });
+    expect(summary.course_summary_race_count).toBe(40);
+    expect(JSON.stringify(summary)).not.toContain("SECRET_PROMPT_BODY");
   });
 
   it("returns stored predict input only behind Access", async () => {

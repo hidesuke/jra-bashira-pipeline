@@ -520,6 +520,7 @@ describe("dify v1 inputs", () => {
       venue: "{{venue}}",
       surface: "{{surface}}",
       distance: "{{distance}}",
+      course_summary: "{{course_summary}}",
     });
     expect(COURSE_USER_DIFY_TOKENS).toEqual({
       venue: "{{#1788717846587.course#}}",
@@ -548,6 +549,7 @@ describe("dify v1 inputs", () => {
       venue: "福島",
       surface: "芝",
       distance: "1600",
+      course_summary: "要約本文",
     });
     expect(course).toBe(["福島", "芝", "1600"].join("\n"));
     expect(course).not.toContain("{{");
@@ -566,8 +568,16 @@ describe("dify v1 inputs", () => {
       venue: "福島",
       surface: "芝",
       distance: "1600",
+      course_summary: "要約本文",
     });
     expect(course).toBe("福島 1600");
+    const summary = fillCourseUser(`{{venue}}\n{{course_summary}}`, {
+      venue: "京都",
+      surface: "ダート",
+      distance: "1800",
+      course_summary: "要約本文",
+    });
+    expect(summary).toBe("京都\n要約本文");
   });
 
   it("rejects a leftover {{# or {{name}} placeholder", () => {
@@ -578,7 +588,7 @@ describe("dify v1 inputs", () => {
       condition: "良",
       remarks: "なし",
     };
-    const courseValues = { venue: "福島", surface: "芝", distance: "1600" };
+    const courseValues = { venue: "福島", surface: "芝", distance: "1600", course_summary: "要約本文" };
     expect(() => fillRaceUser(`${RACE_USER_PLACEHOLDERS.weather}\n{{unknown}}`, raceValues)).toThrow(JobError);
     expect(() => fillRaceUser(`${RACE_USER_PLACEHOLDERS.weather}\n{{#999.leftover#}}`, raceValues)).toThrow(/差し込み/);
     expect(() => fillCourseUser(`${COURSE_USER_PLACEHOLDERS.venue}\n{{surface_extra}}`, courseValues)).toThrow(JobError);

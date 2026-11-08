@@ -17,6 +17,7 @@ function appConfig(env: Env): AppConfig {
     statsPeriodYears: positiveInt(env.STATS_PERIOD_YEARS, "STATS_PERIOD_YEARS"),
     statsMinStarts: positiveInt(env.STATS_MIN_STARTS, "STATS_MIN_STARTS"),
     broodmareMinStarts: positiveInt(env.STATS_BROODMARE_SIRE_MIN_STARTS, "STATS_BROODMARE_SIRE_MIN_STARTS"),
+    courseSummaryMinCount: positiveInt(env.COURSE_SUMMARY_MIN_COUNT, "COURSE_SUMMARY_MIN_COUNT"),
     defaultModel: env.DEFAULT_MODEL,
   };
 }

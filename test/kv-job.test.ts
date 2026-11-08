@@ -23,6 +23,7 @@ const config = {
   statsPeriodYears: 5,
   statsMinStarts: 30,
   broodmareMinStarts: 50,
+  courseSummaryMinCount: 30,
   defaultModel: "gemini-flash-latest",
 };
 

@@ -236,6 +236,14 @@ async function getJob(url: URL, deps: HttpDeps): Promise<Response> {
     requested_by: state.requestedBy,
     notion_page_id: state.notionPageId,
     course_variant: state.courseVariant,
+    course_summary: state.courseSummary?.text ?? null,
+    course_summary_error: state.courseSummary?.error ?? null,
+    course_summary_period:
+      state.courseSummary?.periodFrom && state.courseSummary.periodTo
+        ? { from: state.courseSummary.periodFrom, to: state.courseSummary.periodTo }
+        : null,
+    course_summary_race_count: state.courseSummary?.raceCount ?? null,
+    course_summary_race_count_truncated: state.courseSummary?.raceCountTruncated ?? false,
     gemini: {
       course: courseGeminiJson(state.gemini?.course),
       race: raceGeminiJson(state.gemini?.race),

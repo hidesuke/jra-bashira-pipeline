@@ -35,11 +35,12 @@ export function fillRaceUser(
   );
 }
 
-/** コース特徴ユーザー文。競馬場・芝/ダート/障害・距離だけ。 */
+/** コース特徴ユーザー文。競馬場・芝/ダート/障害・距離と、コードで計算したコースデータ要約。 */
 export const COURSE_USER_PLACEHOLDERS = {
   venue: "{{venue}}",
   surface: "{{surface}}",
   distance: "{{distance}}",
+  course_summary: "{{course_summary}}",
 } as const;
 
 /** 移行期間の Dify ノード ID。course は競馬場、type は馬場種類。 */
@@ -49,7 +50,10 @@ export const COURSE_USER_DIFY_TOKENS = {
   distance: "{{#1788717846587.distance#}}",
 } as const;
 
-export function fillCourseUser(template: string, values: { venue: string; surface: string; distance: string }): string {
+export function fillCourseUser(
+  template: string,
+  values: { venue: string; surface: string; distance: string; course_summary: string },
+): string {
   return fillPlaceholders(
     template,
     COURSE_USER_PLACEHOLDERS,

@@ -24,7 +24,7 @@
 2. Consumer がメッセージを 1 件ずつ進める。段階は、出走と馬場の収集、馬ごとの近走、コース集計、Gemini、Notion への書き込みです。
 3. 同じレースを再実行するときは、前の BASHIRA ページをアーカイブし、同じ書式で新しいページを作ります。
 
-段階の分割、外部呼び出しの上限、同じレースのロックは [docs/pipeline.md](docs/pipeline.md) に書いてあります。コース集計（`get_stats`）の結果は、コース分析にもレース予想にも渡しません。
+段階の分割、外部呼び出しの上限、同じレースのロックは [docs/pipeline.md](docs/pipeline.md) に書いてあります。種牡馬・母父・騎手などのコース集計（`get_stats` のキャッシュ）は、コース分析にもレース予想にも渡しません。コース分析には、別に計算したコースデータ要約だけを渡します。差し込み名は [docs/prompts.md](docs/prompts.md)、集計の中身は [docs/course-odds.md](docs/course-odds.md) です。
 
 プロンプト本文を KV へ入れる手順は、このリポジトリにはありません。Worker が読むのは、KV に入っている `{"version","system","user"}` だけです。差し込み名は [docs/prompts.md](docs/prompts.md) です。
 
@@ -56,6 +56,7 @@ npm ci
 | `STATS_PERIOD_YEARS` | `5` |
 | `STATS_MIN_STARTS` | `30` |
 | `STATS_BROODMARE_SIRE_MIN_STARTS` | `50` |
+| `COURSE_SUMMARY_MIN_COUNT` | `30`。コースデータ要約で「開催が少ないため参考値」と書く件数の下限 |
 
 型とテスト:
 

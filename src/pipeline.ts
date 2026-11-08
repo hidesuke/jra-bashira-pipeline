@@ -2,6 +2,7 @@ import { fetchBaba, babaFailure, type BabaBinding } from "./baba";
 import { pageBlocks, pageTitle } from "./body";
 import { chunkChildren } from "./notion-blocks";
 import { ExternalBudget } from "./budget";
+import { collectCourseSummary, courseSummaryText, failedCourseSummary } from "./course-summary";
 import { composeRemarks, fillCourseUser, fillRaceUser, mergeGoing } from "./dify-input";
 import { readRacePrediction } from "./extract-prediction";
 import { checkPredictionConsistency } from "./consistency";
@@ -49,6 +50,8 @@ export interface AppConfig {
   statsPeriodYears: number;
   statsMinStarts: number;
   broodmareMinStarts: number;
+  /** コースデータ要約で「開催が少ないため参考値」と書く件数の下限。 */
+  courseSummaryMinCount: number;
   defaultModel: string;
 }
 
@@ -433,6 +436,36 @@ async function runStats(state: JobState, deps: PipelineDeps): Promise<void> {
   await enqueuePhase(state, deps);
 }
 
+/** 集計の失敗は予想を止めない。理由はジョブに残し、差し込みは「要約なし」にする。 */
+async function safeCourseSummary(
+  state: JobState,
+  deps: PipelineDeps,
+  surface: string | null,
+  distance: number | null,
+): Promise<JobState["courseSummary"]> {
+  if (!surface || distance == null) {
+    return failedCourseSummary("レースの馬場種類または距離が無いため、コースデータ要約を作れません");
+  }
+  try {
+    const listed = await deps.bashira.listTools();
+    if (!listed.ok) throw new JobError(listed.message, false);
+    return await collectCourseSummary({
+      bashira: deps.bashira,
+      catalog: catalogFromTools(listed.tools),
+      venue: state.race.venue,
+      surface,
+      distance,
+      raceDate: state.race.date,
+      periodYears: deps.config.statsPeriodYears,
+      minCount: deps.config.courseSummaryMinCount,
+    });
+  } catch (err) {
+    const message = errorMessage(err);
+    deps.log?.("course_summary_failed", { raceKey: state.race.raceKey, error: message });
+    return failedCourseSummary(message);
+  }
+}
+
 async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
   if (!state.prediction) {
     const budget = new ExternalBudget();
@@ -441,6 +474,7 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
     const racePrompt = await loadPrompt(deps.kv, "race");
     const surface = state.raceRow ? stringField(state.raceRow, "surface") : null;
     const distance = state.raceRow ? numberField(state.raceRow, "distance") : null;
+    if (!state.courseSummary) state.courseSummary = await safeCourseSummary(state, deps, surface, distance);
     const going = mergeGoing({ raceRow: state.raceRow, baba: state.baba, surface });
     const course = await generateText({
       apiKey: deps.config.geminiApiKey,
@@ -453,6 +487,7 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
         venue: state.race.venue,
         surface: surface ?? "不明",
         distance: distance == null ? "不明" : String(distance),
+        course_summary: courseSummaryText(state.courseSummary),
       }),
     });
     state.gemini = { ...state.gemini, course: courseCallRecord(course) };

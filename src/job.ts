@@ -1,3 +1,4 @@
+import type { CourseSummaryRecord } from "./course-summary";
 import type { ConsistencyWarning } from "./consistency";
 import type { FormTask } from "./form";
 import type { CourseGeminiCall, GeminiCallRecord } from "./gemini";
@@ -40,6 +41,11 @@ export interface JobState {
   odds: OddsSummary | null;
   /** 内・外のデータは無い。常に null。 */
   courseVariant: null;
+  /**
+   * コース分析に渡すコースデータ要約。未計算のジョブでは未設定。
+   * 失敗しても予想は続け、error に理由を残す。
+   */
+  courseSummary?: CourseSummaryRecord | null;
   statTasks: StatTask[];
   prediction: StoredPrediction | null;
   notionPageId: string | null;
