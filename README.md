@@ -129,7 +129,7 @@ npx wrangler secret put NOTIFY_WEBHOOK_KEY
 
 | メソッド | パス | 認証 | 役割 |
 | --- | --- | --- | --- |
-| `GET` | `/health` | なし | 生存確認。`mode` は `next-day-batch`。`commit` と `version_id` も返す |
+| `GET` | `/health` | なし | 生存確認。`mode` は `next-day-batch`。`version`、`commit`、`version_id` も返す |
 | `POST` | `/run` | Access JWT | レース 1 件を積む。受理は 202、処理中は 409 |
 | `POST` | `/admin/batch` | Access JWT | 指定した開催日の全レースを積む。`dry_run: true` は一覧だけで積まない |
 | `GET` | `/oauth/start` | Access JWT | BASHIRA の認可を始める |

@@ -21,6 +21,7 @@ import { enqueueRace } from "./enqueue";
 import type { AppConfig } from "./pipeline";
 import { parseRaceRequest } from "./race-ref";
 import { JobError, errorMessage, type JobMessage, type KvStore } from "./types";
+import { APP_VERSION } from "./version";
 import type { JWTPayload } from "jose";
 import { ExternalBudget } from "./budget";
 
@@ -74,6 +75,7 @@ export async function handleRequest(request: Request, deps: HttpDeps): Promise<R
       return json({
         ok: true,
         mode: "next-day-batch",
+        version: APP_VERSION,
         commit: commitOf(deps),
         version_id: deps.version?.id || null,
       });

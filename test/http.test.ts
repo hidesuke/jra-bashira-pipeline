@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { handleRequest, type HttpDeps } from "../src/http";
+import { APP_VERSION } from "../src/version";
 import type { JobState } from "../src/job";
 import { keys, MemoryKv } from "../src/kv";
 import { saveLlmTrace } from "../src/llm-trace";
@@ -132,7 +136,17 @@ describe("http", () => {
     expect(await response.text()).toContain("認可が完了");
     const health = await handleRequest(new Request("https://worker.example/health"), http);
     expect(health.status).toBe(200);
-    expect(await health.json()).toEqual({ ok: true, mode: "next-day-batch", commit: null, version_id: null });
+    const pkg = JSON.parse(
+      readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../package.json"), "utf8"),
+    ) as { version: string };
+    expect(APP_VERSION).toBe(pkg.version);
+    expect(await health.json()).toEqual({
+      ok: true,
+      mode: "next-day-batch",
+      version: pkg.version,
+      commit: null,
+      version_id: null,
+    });
   });
 
   it("does not return prompt text or raw KV values from job lookups", async () => {

@@ -30,7 +30,7 @@ Worker がまだ無い状態では `wrangler secret put` もダッシュボー�
 
 ## ビルドと `/health` の commit
 
-`/health` は `ok`、`mode`（`next-day-batch`）、`commit`、`version_id` を返します。`commit` は、空でなければ `CF_VERSION_METADATA.tag` です。Workers Builds ではこの tag が空になることがあります。そのときはビルド時に `src/build-info.ts` へ書いた SHA を使います。両方空なら `commit` は null です。
+`/health` は `ok`、`mode`（`next-day-batch`）、`version`（`package.json` の version。コードでは `APP_VERSION`）、`commit`、`version_id` を返します。`commit` は、空でなければ `CF_VERSION_METADATA.tag` です。Workers Builds ではこの tag が空になることがあります。そのときはビルド時に `src/build-info.ts` へ書いた SHA を使います。両方空なら `commit` は null です。
 
 SHA を書くのは `scripts/write-build-info.mjs` です。次のときだけファイルを書き換えます。
 
