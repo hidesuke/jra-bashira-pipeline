@@ -520,6 +520,9 @@ describe("dify v1 inputs", () => {
       weather: "{{weather}}",
       condition: "{{condition}}",
       remarks: "{{remarks}}",
+      past_runs: "{{past_runs}}",
+      course_records: "{{course_records}}",
+      win_odds: "{{win_odds}}",
     });
     expect(RACE_USER_DIFY_TOKENS).toEqual({
       umabashira: "{{#1788721223615.output#}}",
@@ -556,6 +559,9 @@ describe("dify v1 inputs", () => {
       weather: "晴",
       condition: "良",
       remarks: "なし",
+      past_runs: "",
+      course_records: "",
+      win_odds: "",
     });
     expect(filled).toBe("race_facts" in raceTokens ? ["レース情報", body].join("\n") : `レース情報\n\n${body}`);
     expect(filled).not.toContain("{{");
@@ -577,6 +583,9 @@ describe("dify v1 inputs", () => {
       weather: "晴",
       condition: "良",
       remarks: "なし",
+      past_runs: "",
+      course_records: "",
+      win_odds: "",
     });
     expect(filled).toBe("レース情報\n\n馬柱本文\n晴");
     const course = fillCourseUser(`${COURSE_USER_DIFY_TOKENS.venue} ${COURSE_USER_PLACEHOLDERS.distance}`, {
@@ -603,6 +612,9 @@ describe("dify v1 inputs", () => {
       weather: "晴",
       condition: "良",
       remarks: "なし",
+      past_runs: "",
+      course_records: "",
+      win_odds: "",
     };
     const courseValues = { venue: "福島", surface: "芝", distance: "1600", course_summary: "要約本文" };
     expect(() => fillRaceUser(`${RACE_USER_PLACEHOLDERS.weather}\n{{unknown}}`, raceValues)).toThrow(JobError);

@@ -115,6 +115,38 @@ function horsesFromEntries(rows: Record<string, unknown>[]): OddsHorse[] {
   }));
 }
 
+/**
+ * レース予想の `{{win_odds}}`。取れない馬はコロンのあとが空。
+ * 観測時刻は最も遅い odds_observed_at を日本時間にしたもの。
+ */
+export function renderWinOddsText(entries: Record<string, unknown>[], odds: OddsSummary | null): string {
+  const byNumber = new Map<number, OddsHorse>();
+  for (const horse of odds?.horses ?? []) {
+    if (horse.horseNumber != null && !byNumber.has(horse.horseNumber)) byNumber.set(horse.horseNumber, horse);
+  }
+  const horses = [...entries].sort((a, b) => (numberField(a, "horse_number") ?? 99) - (numberField(b, "horse_number") ?? 99));
+  const lines = horses.map((entry) => {
+    const number = numberField(entry, "horse_number");
+    const name = stringField(entry, "horse_name") ?? "馬名不明";
+    const label = number == null ? name : `${trimNum(number)} ${name}`;
+    const horse = number == null ? undefined : byNumber.get(number);
+    return `${label}: ${horse ? formatPrice(horse) : ""}`;
+  });
+  return ["# 単勝オッズ", `観測時刻: ${odds?.observedAtJst ?? ""}`, `種別: ${odds?.kind ?? ""}`, ...lines].join("\n");
+}
+
+function formatPrice(horse: OddsHorse): string {
+  if (horse.odds != null) return trimNum(horse.odds);
+  if (horse.oddsMin != null || horse.oddsMax != null) {
+    return `${horse.oddsMin == null ? "" : trimNum(horse.oddsMin)}〜${horse.oddsMax == null ? "" : trimNum(horse.oddsMax)}`;
+  }
+  return "";
+}
+
+function trimNum(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(value);
+}
+
 function empty(reason: OddsReason, detail: string | null): OddsSummary {
   return {
     source: "none",

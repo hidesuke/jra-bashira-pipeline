@@ -61,6 +61,9 @@ describe("20261108 Tokyo 11R race facts", () => {
         weather: "晴",
         condition: "良",
         remarks: "なし",
+        past_runs: "",
+        course_records: "",
+        win_odds: "",
       },
     );
     expect(user.startsWith("# レース情報")).toBe(true);
@@ -74,6 +77,9 @@ describe("20261108 Tokyo 11R race facts", () => {
       weather: "",
       condition: "",
       remarks: "",
+      past_runs: "",
+      course_records: "",
+      win_odds: "",
     });
     expect(placed.startsWith("前置き\n# レース情報")).toBe(true);
     expect(placed.indexOf("# レース情報")).toBe(placed.lastIndexOf("# レース情報"));

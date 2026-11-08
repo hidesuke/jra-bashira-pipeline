@@ -56,6 +56,7 @@ function harness(options?: {
   courseSummaryMinCount?: number;
   /** レース予想の generateContent だけ 500 にする。 */
   failRaceGemini?: boolean;
+  courseText?: string;
   onEntries?: (args: Record<string, unknown>) => { ok: true; data: unknown } | null;
 }) {
   const kv = new MemoryKv();
@@ -82,7 +83,17 @@ function harness(options?: {
     },
     async callTool(name, args) {
       if (name === "get_races") {
-        const filters = (args.filters ?? {}) as { race_status?: string };
+        const filters = (args.filters ?? {}) as { race_status?: string; race_id?: string | string[] };
+        if (filters.race_id) {
+          const ids = Array.isArray(filters.race_id) ? filters.race_id : [filters.race_id];
+          return {
+            ok: true,
+            data: {
+              rows: ids.map((id) => ({ race_id: id, first_3f_sec: 34.5, last_3f_sec: 35.6 })),
+              truncated: false,
+            },
+          };
+        }
         if (filters.race_status === "finished") {
           return {
             ok: true,
@@ -124,21 +135,34 @@ function harness(options?: {
         entryCalls.push(args);
         const custom = options?.onEntries?.(args);
         if (custom) return custom;
-        const filters = (args as { filters?: { horse_name?: string } }).filters;
-        if (filters?.horse_name) {
+        const filters = (args as { filters?: { horse_name?: string | string[] } }).filters;
+        const horseName = filters?.horse_name;
+        if (Array.isArray(horseName)) {
+          return {
+            ok: true,
+            data: {
+              truncated: false,
+              rows: horseName.flatMap((name) => sampleCareerRows(String(name))),
+            },
+          };
+        }
+        if (typeof horseName === "string" && horseName) {
+          if (args.limit === 500) {
+            return { ok: true, data: { truncated: false, rows: sampleCareerRows(horseName) } };
+          }
           return {
             ok: true,
             data: {
               rows: [
                 {
-                  horse_name: filters.horse_name,
+                  horse_name: horseName,
                   race_meeting_date: "2026-11-07",
                   race_track: "福島",
                   race_number: 11,
                   entry_status: "upcoming",
                 },
                 {
-                  horse_name: filters.horse_name,
+                  horse_name: horseName,
                   race_meeting_date: "2026-10-12",
                   race_track: "東京",
                   surface: "芝",
@@ -261,7 +285,7 @@ function harness(options?: {
             "",
             "先行有利",
           ].join("\n"))
-        : "コースは先行が残る";
+        : (options?.courseText ?? "コースは先行が残る");
       const modelVersion = isRace ? "gemini-race-001" : "gemini-course-001";
       if (isRace && options?.failRaceGemini) {
         return Response.json({ error: { message: "race boom" } }, { status: 500 });
@@ -367,6 +391,63 @@ function harness(options?: {
     },
   };
   return { deps, kv, pending, statBatches, entryCalls, geminiBodies, notionCalls, archivedIds, createdIds };
+}
+
+function sampleCareerRows(name: string): Record<string, unknown>[] {
+  return [
+    {
+      horse_name: name,
+      race_meeting_date: "2026-11-07",
+      race_track: "福島",
+      race_number: 11,
+      surface: "芝",
+      distance: 1600,
+      entry_status: "upcoming",
+    },
+    {
+      horse_name: name,
+      race_meeting_date: "2026-10-12",
+      race_track: "東京",
+      race_number: 5,
+      surface: "芝",
+      distance: 1600,
+      rail_type: "A",
+      track_condition: "良",
+      race_condition: "3勝クラス",
+      grade: "G3",
+      race_name_main: "テスト前走",
+      official_result: 2,
+      finish_time_sec: 93.2,
+      time_difference_with_winner_sec: 0.2,
+      first_corner_position: 3,
+      second_corner_position: 3,
+      third_corner_position: 2,
+      fourth_corner_position: 2,
+      last_3f_sec: 33.8,
+      last_3f_rank: 1,
+      jockey_name: "騎手A",
+      weight_to_carry_kg: 56,
+      horse_weight: 470,
+      horse_weight_difference_with_previous_race: -2,
+      horse_number: 3,
+      days_since_last_race: 28,
+      scheduled_horse_count: 16,
+      win_odds_rank: 4,
+      win_odds: 6.5,
+      is_jockey_change: false,
+      entry_status: "finished",
+    },
+    {
+      horse_name: name,
+      race_meeting_date: "2026-05-03",
+      race_track: "福島",
+      race_number: 11,
+      surface: "芝",
+      distance: 1600,
+      official_result: 1,
+      entry_status: "finished",
+    },
+  ];
 }
 
 type PromptStyle = "placeholder" | "dify";
@@ -530,7 +611,16 @@ describe("pipeline", () => {
     expect(env.entryCalls[0]?.columns).toEqual(
       expect.arrayContaining(["trainer_name", "trainer_east_west", "horse_weight", "horse_weight_difference_with_previous_race"]),
     );
-    expect(job.raceInputGaps).toEqual(["内外回り（BASHIRA に項目が無い）", "仮柵（BASHIRA に項目が無い）", "2 イの馬体重"]);
+    expect(job.raceInputGaps).toEqual([
+      "内外回り（BASHIRA に項目が無い）",
+      "仮柵（BASHIRA に項目が無い）",
+      "2 イの馬体重",
+      "関連コース（コース分析に一覧が無い）",
+    ]);
+    expect(raceUser).toContain("# 過去走（近10走）");
+    expect(raceUser).toContain("# コース成績");
+    expect(raceUser).not.toContain("# 単勝オッズ");
+    expect(bodyText).not.toContain("### 単勝オッズ");
     expect(job.courseSummary?.status).toBe("ok");
     expect(job.courseSummary?.raceCount).toBe(40);
     expect(job.courseSummary?.text).toContain("脚質（4角の位置）");
@@ -605,6 +695,36 @@ describe("pipeline", () => {
     expect(trace?.raceOutput).toBeNull();
     expect(JSON.stringify(trace)).not.toContain("コースシステム");
     expect(JSON.stringify(trace)).not.toContain("予測システム");
+  });
+
+  it("strips related courses, counts them, and keeps win odds out of a v1 template", async () => {
+    const courseText = ["コースは先行が残る", "", "<<<related-courses>>>", "東京,芝,1600", "福島,芝,1600", "<<<end>>>", ""].join("\n");
+    const env = harness({ courseText });
+    await seedPrompts(env.kv);
+    const results = await drain(env, { kind: "start", runId: "run-related", race, requestedBy: "Grok Bot" });
+    expect(results.every((result) => result === "ack")).toBe(true);
+    const raceUser =
+      (env.geminiBodies[1]?.contents as Array<{ parts?: Array<{ text?: string }> }> | undefined)?.[0]?.parts?.[0]?.text ?? "";
+    expect(raceUser).toContain("コースは先行が残る");
+    expect(raceUser).not.toContain("<<<related-courses>>>");
+    expect(raceUser).not.toContain("<<<end>>>");
+    expect(raceUser).toContain("同じコース: (1,0,0,0,0,0)");
+    expect(raceUser).toContain("同じ競馬場: (1,0,0,0,0,0)");
+    expect(raceUser).toContain("関連コース: (1,1,0,0,0,0)");
+    expect(raceUser).toContain("| 4 | 6.5 | 34.5 | 35.6 |");
+    expect(raceUser).not.toContain("# 単勝オッズ");
+    const trace = await loadLlmTrace(env.kv, race.raceKey);
+    expect(trace?.courseOutput).toContain("<<<related-courses>>>");
+    const job = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(job.prediction?.courseText).toBe("コースは先行が残る");
+    expect(job.raceInputGaps).toEqual(["内外回り（BASHIRA に項目が無い）", "仮柵（BASHIRA に項目が無い）", "2 イの馬体重"]);
+    expect(env.entryCalls.filter((call) => call.limit === 500)).toHaveLength(1);
+    const page = env.notionCalls.find((call) => call.method === "POST" && call.path === "/v1/pages");
+    const body = JSON.stringify(page?.body);
+    expect(body).toContain("コースは先行が残る");
+    expect(body).not.toContain("related-courses");
+    expect(body).not.toContain("### 単勝オッズ");
+    expect(body).toContain("オッズ種別: 最終");
   });
 
   it("fills legacy Dify user tokens through the predict step", async () => {
@@ -963,7 +1083,11 @@ describe("pipeline", () => {
     };
     const results = await drain(env, { kind: "start", runId: "run-same", race, requestedBy: "Grok Bot" });
     expect(results.every((result) => result === "ack")).toBe(true);
-    const queried = env.entryCalls.map((args) => (args.filters as { horse_name?: string }).horse_name ?? "(card)");
+    const queried = env.entryCalls.flatMap((args) => {
+      const horseName = (args.filters as { horse_name?: string | string[] } | undefined)?.horse_name;
+      if (horseName == null) return ["(card)"];
+      return Array.isArray(horseName) ? horseName : [horseName];
+    });
     expect(queried).toContain("マイネルエンペラー");
     expect(queried).toContain("マイネルエンペラー (2020)");
     expect(queried.filter((name) => name.startsWith("ゴースト"))).toEqual(["ゴースト"]);

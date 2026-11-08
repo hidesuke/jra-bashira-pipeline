@@ -1,6 +1,7 @@
 import { BASHIRA_MARKER, type RaceRef } from "./types";
 import type { OddsSummary } from "./odds";
 import { dividerBlock, grayParagraph, markdownToNotionBlocks } from "./notion-blocks";
+import { stripRelatedCourses } from "./related-courses";
 
 export interface PageBodyInput {
   race: RaceRef;
@@ -41,10 +42,14 @@ export function pageBlocks(input: PageBodyInput): Array<Record<string, unknown>>
   return blocks;
 }
 
+/**
+ * 予想本文の見出し順はモデルの出力のまま。
+ * Worker が足すのは、本文に無い印と、コース分析だけ。
+ * コース分析は `### 指数ランキングと短評` の直前に置く。その見出しが無いときは末尾。
+ * 単勝オッズの節は出さない。倍率はフッターの観測と、レース予想の `{{win_odds}}` に残す。
+ */
 export function pageMarkdown(input: PageBodyInput): string {
-  const parts: string[] = [];
-  const body = input.予想本文.trim();
-  if (body) parts.push(body);
+  let body = input.予想本文.trim();
   const mark = input.印.trim();
   if (mark && !body.includes("競馬新聞風印予想")) {
     const bullets = mark
@@ -52,15 +57,24 @@ export function pageMarkdown(input: PageBodyInput): string {
       .map((line) => line.trim())
       .filter((line) => line !== "")
       .map((line) => (line.startsWith("- ") || line.startsWith("* ") ? line : `- ${line}`));
-    parts.push(["### 競馬新聞風印予想", ...bullets].join("\n"));
+    const section = ["### 競馬新聞風印予想", ...bullets].join("\n");
+    body = body ? `${body}\n\n${section}` : section;
   }
-  const course = clipAnalysis(input.courseText).trim();
-  if (course && !body.includes(course.slice(0, 80))) {
-    parts.push(`### コース分析\n${course}`);
-  }
-  const horses = oddsLines(input.odds);
-  if (horses.length > 0) parts.push(["### 単勝オッズ", ...horses.map((line) => `- ${line}`)].join("\n"));
-  return parts.join("\n\n");
+  const course = clipAnalysis(stripRelatedCourses(input.courseText).text).trim();
+  if (course && !body.includes(course.slice(0, 80))) body = placeCourseAnalysis(body, course);
+  return body;
+}
+
+const RANKING_HEADING = "### 指数ランキングと短評";
+
+function placeCourseAnalysis(body: string, course: string): string {
+  const section = `### コース分析\n${course}`;
+  const lines = body.split("\n");
+  const index = lines.findIndex((line) => line.trim() === RANKING_HEADING);
+  if (index < 0) return body ? `${body}\n\n${section}` : section;
+  const before = lines.slice(0, index).join("\n").trimEnd();
+  const after = lines.slice(index).join("\n").trimStart();
+  return [before, section, after].filter((part) => part !== "").join("\n\n");
 }
 
 export function footerLines(input: PageBodyInput): string[] {
@@ -75,16 +89,6 @@ export function footerLines(input: PageBodyInput): string[] {
   ];
   if (input.odds.detail) lines.push(`オッズ詳細: ${input.odds.detail}`);
   return lines;
-}
-
-function oddsLines(odds: OddsSummary): string[] {
-  return odds.horses
-    .filter((horse) => horse.odds != null || horse.oddsMin != null)
-    .map((horse) => {
-      const number = horse.horseNumber ?? horse.selection ?? "?";
-      const price = horse.odds ?? `${horse.oddsMin ?? "-"}〜${horse.oddsMax ?? "-"}`;
-      return `${number}: ${price}`;
-    });
 }
 
 function gradeLabel(grade: string | null | undefined): string | null {
