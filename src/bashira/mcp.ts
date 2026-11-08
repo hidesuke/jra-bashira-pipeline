@@ -158,38 +158,104 @@ export function unwrapToolResult(result: unknown): unknown {
   }
 }
 
-/** 名前が複数候補のまま絞れていない応答。実レスポンスの形は未確認なので、明示的な候補配列だけを見る。 */
-export function ambiguousNameMessage(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object") return null;
+export interface NameCandidate {
+  name: string;
+  starts: number | null;
+  period: string | null;
+}
+
+/** `name_resolution` の 1 件。配列（実応答）と、フィールド名をキーにしたオブジェクトの両方。 */
+export interface NameResolutionEntry {
+  field: string | null;
+  query: string | null;
+  status: string | null;
+  candidates: NameCandidate[];
+  /** status=ambiguous、または候補が複数で未解決。 */
+  unresolved: boolean;
+}
+
+/**
+ * 名前が複数候補のまま絞れていない応答。
+ * 実応答は `name_resolution: [{ field, query, status: "ambiguous"|"resolved", candidates: [{ name, starts, period }] }]`。
+ */
+export function readNameResolutions(payload: unknown): NameResolutionEntry[] {
+  if (!payload || typeof payload !== "object") return [];
   const resolution = (payload as { name_resolution?: unknown }).name_resolution;
-  if (!resolution || typeof resolution !== "object") return null;
-  const entries = Array.isArray(resolution) ? resolution : Object.values(resolution);
-  const problems: string[] = [];
-  for (const entry of entries) {
-    if (!entry || typeof entry !== "object") continue;
-    const record = entry as {
-      candidates?: unknown;
-      matches?: unknown;
-      resolved?: unknown;
-      selected?: unknown;
-      ambiguous?: unknown;
-    };
-    if (record.ambiguous === false || record.resolved || record.selected) continue;
-    const candidates = Array.isArray(record.candidates)
-      ? record.candidates
-      : Array.isArray(record.matches)
-        ? record.matches
-        : null;
-    if (record.ambiguous === true || (candidates && candidates.length > 1)) {
-      const names = (candidates ?? []).slice(0, 5).map((candidate) => {
-        if (candidate && typeof candidate === "object" && "name" in candidate) {
-          return String((candidate as { name: unknown }).name);
-        }
-        return typeof candidate === "string" ? candidate : JSON.stringify(candidate);
-      });
-      problems.push(names.join(" / ") || "候補あり");
-    }
-  }
+  if (!resolution || typeof resolution !== "object") return [];
+  const entries = Array.isArray(resolution) ? resolution : objectResolutionEntries(resolution);
+  return entries.flatMap((entry) => {
+    const parsed = parseResolutionEntry(entry);
+    return parsed ? [parsed] : [];
+  });
+}
+
+export function ambiguousNameMessage(payload: unknown): string | null {
+  const problems = readNameResolutions(payload).filter((entry) => entry.unresolved);
   if (problems.length === 0) return null;
-  return `BASHIRA の名前解決が曖昧です: ${problems.join(" ; ")}。候補を決め打ちしないので止めます`;
+  const text = problems.map((entry) => entry.candidates.slice(0, 5).map((candidate) => candidate.name).join(" / ") || "候補あり");
+  return `BASHIRA の名前解決が曖昧です: ${text.join(" ; ")}。候補を決め打ちしないので止めます`;
+}
+
+function objectResolutionEntries(resolution: object): unknown[] {
+  return Object.entries(resolution).map(([key, value]) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const record = value as Record<string, unknown>;
+      if (typeof record.field === "string") return record;
+      return { ...record, field: key };
+    }
+    return value;
+  });
+}
+
+function parseResolutionEntry(entry: unknown): NameResolutionEntry | null {
+  if (!entry || typeof entry !== "object") return null;
+  const record = entry as {
+    field?: unknown;
+    query?: unknown;
+    status?: unknown;
+    candidates?: unknown;
+    matches?: unknown;
+    resolved?: unknown;
+    selected?: unknown;
+    ambiguous?: unknown;
+  };
+  const candidates = readCandidates(record.candidates ?? record.matches);
+  const status = typeof record.status === "string" ? record.status : null;
+  const closed = record.ambiguous === false || status === "resolved" || Boolean(record.resolved) || Boolean(record.selected);
+  const unresolved = !closed && (record.ambiguous === true || status === "ambiguous" || candidates.length > 1);
+  return {
+    field: typeof record.field === "string" ? record.field : null,
+    query: typeof record.query === "string" ? record.query : null,
+    status,
+    candidates,
+    unresolved,
+  };
+}
+
+function readCandidates(raw: unknown): NameCandidate[] {
+  if (!Array.isArray(raw)) return [];
+  const candidates: NameCandidate[] = [];
+  for (const candidate of raw) {
+    if (typeof candidate === "string" && candidate.trim() !== "") {
+      candidates.push({ name: candidate, starts: null, period: null });
+      continue;
+    }
+    if (candidate && typeof candidate === "object" && "name" in candidate) {
+      const record = candidate as { name: unknown; starts?: unknown; period?: unknown };
+      candidates.push({
+        name: String(record.name),
+        starts: finiteNumber(record.starts),
+        period: typeof record.period === "string" ? record.period : null,
+      });
+      continue;
+    }
+    candidates.push({ name: JSON.stringify(candidate), starts: null, period: null });
+  }
+  return candidates;
+}
+
+function finiteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return Number(value);
+  return null;
 }

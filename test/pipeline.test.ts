@@ -4,6 +4,7 @@ import { pageBlocks } from "../src/body";
 import { COURSE_USER_DIFY_TOKENS, COURSE_USER_PLACEHOLDERS, RACE_USER_DIFY_TOKENS, RACE_USER_PLACEHOLDERS } from "../src/dify-input";
 import type { JobState } from "../src/job";
 import { keys, MemoryKv } from "../src/kv";
+import { loadPredictInput } from "../src/predict-input";
 import { handleJobMessage, NOTION_CONTINUATION_LIMIT, type PipelineDeps } from "../src/pipeline";
 import { QUEUE_MAX_RETRIES, type JobMessage, type RaceRef } from "../src/types";
 import { bashiraTools, notionSchema } from "./fixture";
@@ -48,10 +49,13 @@ function harness(options?: {
   existingPageId?: string;
   failArchiveOnce?: boolean;
   externalBudget?: number;
+  raceText?: string;
+  onEntries?: (args: Record<string, unknown>) => { ok: true; data: unknown } | null;
 }) {
   const kv = new MemoryKv();
   const pending: JobMessage[] = [];
   const statBatches: number[] = [];
+  const entryCalls: Array<Record<string, unknown>> = [];
   const geminiBodies: Array<Record<string, unknown>> = [];
   const notionCalls: Array<{ method: string; path: string; body?: unknown }> = [];
   const createdIds: string[] = [];
@@ -93,6 +97,9 @@ function harness(options?: {
         };
       }
       if (name === "get_entries") {
+        entryCalls.push(args);
+        const custom = options?.onEntries?.(args);
+        if (custom) return custom;
         const filters = (args as { filters?: { horse_name?: string } }).filters;
         if (filters?.horse_name) {
           return {
@@ -195,7 +202,8 @@ function harness(options?: {
       const userText = ((body?.contents as Array<{ parts?: Array<{ text?: string }> }> | undefined)?.[0]?.parts?.[0]?.text) ?? "";
       const isRace = userText.includes("# 馬柱");
       const text = isRace
-        ? [
+        ? (options?.raceText ??
+          [
             "### レース情報",
             "- **レース名:** テストS",
             "",
@@ -208,7 +216,7 @@ function harness(options?: {
             "- ◎ 1 ア",
             "",
             "先行有利",
-          ].join("\n")
+          ].join("\n"))
         : "コースは先行が残る";
       const modelVersion = isRace ? "gemini-race-001" : "gemini-course-001";
       return Response.json({ modelVersion, candidates: [{ content: { parts: [{ text }] } }] });
@@ -287,7 +295,7 @@ function harness(options?: {
       pending.push(message);
     },
   };
-  return { deps, kv, pending, statBatches, geminiBodies, notionCalls, archivedIds, createdIds };
+  return { deps, kv, pending, statBatches, entryCalls, geminiBodies, notionCalls, archivedIds, createdIds };
 }
 
 type PromptStyle = "placeholder" | "dify";
@@ -560,6 +568,182 @@ describe("pipeline", () => {
     expect(job.phase).toBe("error");
     expect(job.error).toContain("サブリクエスト");
     expect(env.notionCalls).toHaveLength(0);
+  });
+
+  it("requeries a same-name horse by birth year, keeps an unresolved note, and warns without blocking Notion", async () => {
+    const raceText = [
+      "### レース総合判定",
+      "- **指数分布ステータス:** 【1強・独走型】",
+      "- **予想自信度:** 【A】 （差がある）",
+      "- **波乱度:** 【堅実】 （順当）",
+      "",
+      "### 競馬新聞風印予想",
+      "- ◎ 1 ミラージュナイト",
+      "",
+      "ミラージュナイトは目黒記念で2着。今回斤量 55 kg。",
+    ].join("\n");
+    const env = harness({
+      raceText,
+      onEntries(args) {
+        const name = (args.filters as { horse_name?: string } | undefined)?.horse_name;
+        if (!name) {
+          return {
+            ok: true,
+            data: {
+              rows: [
+                {
+                  horse_number: 1,
+                  horse_name: "ミラージュナイト",
+                  birth_date: "2022-03-30T00:00:00Z",
+                  weight_to_carry_kg: 57,
+                  career_starts: 12,
+                  prev_official_result: 1,
+                  prev_distance: 2600,
+                  prev_surface: "芝",
+                  days_since_last_race: 105,
+                  jockey_name: "騎手A",
+                  sire_name: "父一",
+                  broodmare_sire_name: "母父一",
+                },
+                {
+                  horse_number: 2,
+                  horse_name: "マイネルエンペラー",
+                  birth_date: "2020-03-13T00:00:00Z",
+                  weight_to_carry_kg: 58.5,
+                  career_starts: 26,
+                  prev_official_result: 2,
+                  prev_distance: 2400,
+                  prev_surface: "芝",
+                  days_since_last_race: 35,
+                  jockey_name: "騎手B",
+                  sire_name: "父二",
+                  broodmare_sire_name: "母父二",
+                },
+                {
+                  horse_number: 3,
+                  horse_name: "ゴースト",
+                  birth_date: "2018-01-01",
+                  weight_to_carry_kg: 56,
+                  career_starts: 11,
+                  prev_official_result: 5,
+                  prev_distance: 1800,
+                  prev_surface: "ダート",
+                  days_since_last_race: 21,
+                  jockey_name: "騎手C",
+                  sire_name: "父三",
+                  broodmare_sire_name: "母父三",
+                },
+              ],
+            },
+          };
+        }
+        if (name === "マイネルエンペラー" || name === "ゴースト") {
+          return {
+            ok: true,
+            data: {
+              row_count: 0,
+              rows: [],
+              name_resolution: [
+                {
+                  field: "horse_name",
+                  query: name,
+                  status: "ambiguous",
+                  candidates: [
+                    { name: `${name} (2020)`, starts: 26, period: "2022〜2026" },
+                    { name: `${name} (1993)`, starts: 99, period: "1995〜1996" },
+                  ],
+                },
+              ],
+            },
+          };
+        }
+        if (name === "マイネルエンペラー (2020)") {
+          return {
+            ok: true,
+            data: {
+              name_resolution: [{ field: "horse_name", query: name, status: "resolved", candidates: [{ name, starts: 26 }] }],
+              rows: [
+                {
+                  horse_name: "マイネルエンペラー",
+                  race_meeting_date: "2026-10-04",
+                  race_track: "京都",
+                  race_number: 11,
+                  surface: "芝",
+                  distance: 2400,
+                  race_name_main: "京都大賞典",
+                  official_result: 2,
+                  entry_status: "finished",
+                },
+              ],
+            },
+          };
+        }
+        if (name === "ミラージュナイト") {
+          return {
+            ok: true,
+            data: {
+              rows: [
+                {
+                  horse_name: "ミラージュナイト",
+                  race_meeting_date: "2026-05-31",
+                  race_track: "東京",
+                  race_number: 11,
+                  surface: "芝",
+                  distance: 2500,
+                  race_name_main: "目黒記念",
+                  official_result: 4,
+                  entry_status: "finished",
+                },
+              ],
+            },
+          };
+        }
+        return { ok: true, data: { rows: [] } };
+      },
+    });
+    await seedPrompts(env.kv);
+    const logs: string[] = [];
+    env.deps.log = (event) => {
+      logs.push(event);
+    };
+    const results = await drain(env, { kind: "start", runId: "run-same", race, requestedBy: "Grok Bot" });
+    expect(results.every((result) => result === "ack")).toBe(true);
+    const queried = env.entryCalls.map((args) => (args.filters as { horse_name?: string }).horse_name ?? "(card)");
+    expect(queried).toContain("マイネルエンペラー");
+    expect(queried).toContain("マイネルエンペラー (2020)");
+    expect(queried.filter((name) => name.startsWith("ゴースト"))).toEqual(["ゴースト"]);
+    const job = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(job.phase).toBe("done");
+    const emperor = job.formTasks.find((task) => task.horseName === "マイネルエンペラー");
+    expect(emperor?.resolution).toMatchObject({ status: "resolved_by_birth_year", resolvedName: "マイネルエンペラー (2020)", birthYear: 2020 });
+    expect(emperor?.rows).toHaveLength(1);
+    const ghost = job.formTasks.find((task) => task.horseName === "ゴースト");
+    expect(ghost?.resolution?.status).toBe("unresolved");
+    expect(ghost?.rows).toEqual([]);
+    expect(ghost?.note).toContain("同名馬のため近走取得不可");
+    expect(ghost?.note).toContain("通算出走数 11");
+    expect(ghost?.note).not.toContain("近走は空");
+    const prompt = (env.geminiBodies[1]?.contents as Array<{ parts?: Array<{ text?: string }> }>)[0]?.parts?.[0]?.text ?? "";
+    expect(prompt).toContain("京都大賞典");
+    expect(prompt).toContain("同名馬のため近走取得不可");
+    expect(prompt).toContain("通算出走数 11");
+    expect(prompt).not.toMatch(/ゴースト[\s\S]{0,80}近走なし/);
+    const stored = await loadPredictInput(env.kv, race.raceKey);
+    expect(stored?.umabashira).toContain("目黒記念");
+    expect(stored?.raceInput).toBe(prompt);
+    expect(stored?.horses.find((horse) => horse.horseName === "ミラージュナイト")?.pastRuns[0]).toMatchObject({
+      raceName: "目黒記念",
+      officialResult: 4,
+    });
+    expect(job.consistencyWarnings?.map((warning) => warning.message)).toEqual([
+      "ミラージュナイトの目黒記念は4着だが、予想本文は2着と書いている",
+      "ミラージュナイトの今回斤量は57kgだが、予想本文は55kgと書いている",
+    ]);
+    expect(logs).toContain("prediction_consistency");
+    const notion = JSON.stringify(env.notionCalls);
+    expect(notion).not.toContain("予想本文は");
+    expect(notion).not.toContain("同名馬のため近走取得不可");
+    expect(job.phase).toBe("done");
   });
 });
 

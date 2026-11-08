@@ -1,4 +1,4 @@
-import type { FormTask } from "./form";
+import { sameNameUnavailableNote, type FormTask } from "./form";
 import { numberField, stringField } from "./rows";
 import type { RaceRef } from "./types";
 
@@ -9,6 +9,7 @@ export const UMABASHIRA_LIMITS = [
   "着差は time_difference_with_winner_sec（秒。勝者が負、敗者が正）。馬身（ハナ・アタマ・クビ等）は BASHIRA に無い。",
   "頭数は scheduled_horse_count（出走予定頭数）。確定頭数は get_entries に無い。",
   "通過順は馬ごとの 1〜4 角順位。レース単位の通過順文字列、各近走のラップ、調教タイムは無い。",
+  "同名で近走を特定できない馬は『同名馬のため近走取得不可』と、通算出走数・前走着順・前走距離・前走馬場・間隔だけを書く。近走なしとは別で、記録が無いという意味ではない。",
 ].join("\n");
 
 export function renderUmabashira(input: {
@@ -73,6 +74,10 @@ function horseBlock(entry: Record<string, unknown>, task: FormTask | undefined):
   }
   if (!task) {
     lines.push("近走: 未取得");
+    return lines.join("\n");
+  }
+  if (task.resolution?.status === "unresolved") {
+    lines.push(task.note ?? sameNameUnavailableNote(task.facts));
     return lines.join("\n");
   }
   if (task.note) lines.push(task.note);

@@ -1,3 +1,4 @@
+import type { ConsistencyWarning } from "./consistency";
 import type { FormTask } from "./form";
 import type { OddsSummary } from "./odds";
 import type { StatTask } from "./stats";
@@ -47,6 +48,15 @@ export interface JobState {
   notionBlocksWritten?: number;
   /** サブリクエスト分割で Notion 段を積み直した回数。 */
   notionContinuations?: number;
+  /** 予想本文と成績の食い違い。Notion には書かない。未実施のジョブでは未設定。 */
+  consistencyWarnings?: ConsistencyWarning[];
+  /** 予想入力を別キーへ書いた結果。本文そのものは入れない。 */
+  predictInput?: {
+    stored: boolean;
+    truncated: boolean;
+    umabashiraBytes: number;
+    raceInputBytes: number;
+  };
   updatedAt: string;
 }
 
