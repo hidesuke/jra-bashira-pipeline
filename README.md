@@ -1,53 +1,104 @@
 # JRA BASHIRA 一次予想 Worker
 
-1 レースずつ BASHIRA から出走・成績・オッズを取り、Gemini でコース分析と一次予想を作り、既存の Notion データベース「場立ちのhidesuke JRA予想」に **別ページ** として書く Cloudflare Worker です。リソース（KV、Queue、Durable Object）は最初の `wrangler deploy` が作ります。シークレットの値はこのリポジトリに置きません。
+1 レースずつ BASHIRA から出走・成績・オッズを取り、Gemini でコース分析と一次予想を作り、既存の Notion データベース「場立ちのhidesuke JRA予想」に別ページとして書く Cloudflare Worker です。
 
-開発モードは手動の 1 レースだけです。cron の時刻は未定なので、定義はコメントアウトしたままです。
+開発中の動かし方は、手動の `POST /run` で 1 レースだけです。cron の時刻は未定で、定義はコメントアウトしたままです。定義を有効にしても、レースは積みません。
 
-## 処理の流れ
+シークレットの値、プロンプトの本文、Access の Client Secret は、このリポジトリに置きません。
 
-1. `POST /run` がレースを 1 件だけ Queue `jra-bashira-race` に積む。
-2. Consumer が 1 メッセージずつ処理する。`get_stats` は 8 件ずつ別メッセージに分ける。
-3. 各馬の近10走を馬柱にし、コース特徴のあとレース予想を行い、Notion に書く。集計（get_stats）は v1 のプロンプトには入れない。
-4. 同じレースの再実行は、KV に覚えたページをアーカイブし、同じ書式で新しいページを作る。作成直後に新しいページ ID を保存し、途中で止まっても再開時はそのページを使う。引き継ぐ ID が無いのに BASHIRA のページが複数あるときはエラーで止まる。
+## 全体の構成
 
-Free プランの外部 `fetch` は 1 呼び出し 50 件までです。Worker 側は 45 件で止め、Durable Object 側の MCP 呼び出しは 40 件で止めます。KV・Queue・Durable Object への内部呼び出しは、この 50 件には入れません（Free では外部 50、内部 1000）。
+このリポジトリは公開の Cloudflare Worker です。予想に使う文章そのものは、別の非公開リポジトリで管理します。
 
-## Workers Builds
+| 役割 | 場所 |
+| --- | --- |
+| 実行 | このリポジトリの Worker `jra-bashira-pipeline` |
+| 入力 | BASHIRA の MCP。`get_races`、`get_entries`、`get_odds`、`get_stats` |
+| 文章生成 | Gemini。先にコース分析を作り、その本文を入れてレース予想を作る |
+| 出力 | Notion データベース `3c57c7b2e419808ba999e9c1909fa39c`（「場立ちのhidesuke JRA予想」）。スキーマは変えず、別ページを追加する |
+| プロンプト | 非公開リポジトリ `hidesuke/jra-bashira-prompts` にだけ本文を置く。Worker は KV の `prompt:v2:course` と `prompt:v2:race` を読む |
 
-Git 接続の Cloudflare Workers Builds は、リポジトリ直下をルートにします。Wrangler は `package.json` の `^4.50.0`、lock では 4.158.0 です。KV / Queue の自動作成は [4.45.0 以降](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning) です。
+処理の骨格は次のとおりです。
+
+1. Access を通した `POST /run` が、レース 1 件を Queue `jra-bashira-race` に積む。
+2. Consumer がメッセージを 1 件ずつ進める。段階は、出走と馬場の収集、馬ごとの近走、コース集計、Gemini、Notion への書き込みです。
+3. 同じレースを再実行するときは、前の BASHIRA ページをアーカイブし、同じ書式で新しいページを作ります。
+
+段階の分割、外部呼び出しの上限、同じレースのロックは [docs/pipeline.md](docs/pipeline.md) に書いてあります。コース集計（`get_stats`）の結果は、コース分析にもレース予想にも渡しません。
+
+プロンプト本文を KV へ入れる手順は、このリポジトリにはありません。Worker が読むのは、KV に入っている `{"version","system","user"}` だけです。差し込み名は [docs/prompts.md](docs/prompts.md) です。
+
+## セットアップ
+
+Node.js 22 以上で、リポジトリ直下から依存を入れます。Wrangler は `package.json` の `^4.50.0`、lock では 4.158.0 です。KV と Queue の自動作成は [Wrangler 4.45.0 以降](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning) です。
+
+```bash
+npm ci
+```
+
+ローカルの `wrangler dev` は、シークレットを `.dev.vars` から読みます。`.dev.vars.example` をコピーし、値は自分の環境だけに書いてください。`.dev.vars` はコミットしません。
+
+例ファイルにある名前は `GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY` です。`ACCESS_AUD` も実行時に必要ですが、例ファイルには行がありません。保護された経路をローカルで試すときは、同じファイルに足してください。`TOKEN_ENCRYPTION_KEY` は `openssl rand -base64 32` で作ります。
+
+本番のシークレットは、最初のデプロイで Worker ができてから入れます。手順は次の節と [docs/operations.md](docs/operations.md) です。
+
+`wrangler.jsonc` の `vars` には、次が入っています。Client Secret は `vars` にも Worker にも置きません。Access が検証し、Worker は `Cf-Access-Jwt-Assertion` だけを見ます。
+
+| 変数 | 内容 |
+| --- | --- |
+| `ACCESS_TEAM_DOMAIN` | `https://hdsk.cloudflareaccess.com` |
+| `ACCESS_CLIENT_ID_GROK` | Grok Bot の Access サービストークンの Client ID。リポジトリ上の値は空で、デプロイ先で置く |
+| `ACCESS_CLIENT_ID_MUSE` | Muse の Client ID。リポジトリ上の値は空で、デプロイ先で置く |
+| `BASHIRA_MCP_URL` | `https://mcp.bashira.omninode.co.jp/mcp` |
+| `BABA_URL` | 馬場 API `https://jra-dify-pipeline.hdsk.workers.dev/baba/latest`。本番はサービスバインディング `BABA` を優先する |
+| `NOTION_DATABASE_ID` | 上のデータベース id |
+| `DEFAULT_MODEL` | `gemini-flash-latest` |
+| `STATS_PERIOD_YEARS` | `5` |
+| `STATS_MIN_STARTS` | `30` |
+| `STATS_BROODMARE_SIRE_MIN_STARTS` | `50` |
+
+型とテスト:
+
+```bash
+npm run types
+npm test
+npm run typecheck
+npm run check
+```
+
+`npm run check` は型検査とテストの両方です。BASHIRA、Gemini、Notion はテストではモックです。
+
+BASHIRA の初回認可は、デプロイと Access のあと、ブラウザで `GET /oauth/start` を開きます。詳細は [docs/bashira-auth.md](docs/bashira-auth.md) です。
+
+## 本番へのデプロイ
+
+Git 接続の Cloudflare Workers Builds は、リポジトリ直下をルートにします。
 
 | 設定 | 値 |
 | --- | --- |
-| Worker 名 | `jra-bashira-pipeline`（`wrangler.jsonc` の `name`。Workers Builds の名前と揃える） |
-| ルートディレクトリ | `/`（リポジトリ直下） |
+| Worker 名 | `jra-bashira-pipeline`（`wrangler.jsonc` の `name` と揃える） |
+| ルートディレクトリ | `/` |
 | ビルドコマンド | `npm ci && node scripts/write-build-info.mjs` |
 | デプロイコマンド | `npx wrangler deploy` |
 
 `npm ci` は lock と `package.json` が一致している必要があります。依存の範囲は `package.json` のままです（TypeScript 5.9、Vitest 3.2、`@types/node` 24）。
 
-`/health` の `commit` は、空でなければ `CF_VERSION_METADATA.tag` です。Workers Builds ではこの tag が空になることがあります。そのときはビルド時の `WORKERS_CI_COMMIT_SHA`（無ければ `git rev-parse HEAD`）を `src/build-info.ts` に書いて使います。`npm ci` の `prepare` と、上のビルドコマンドの両方がこのスクリプトを走らせます。Workers Builds は `wrangler.jsonc` の custom build を実行しません。スクリプトが走らず tag も空なら `commit` は `null` のままです。
+失敗したメッセージの待ち行列 `jra-bashira-race-dlq` は、この deploy では作られません。先に作ります。
 
-最初の `npx wrangler deploy` が次を作ります。id は設定に書きません。Git からの deploy では、作られた id はダッシュボードに残り、リポジトリには書き戻されません。
+```bash
+npx wrangler queues create jra-bashira-race-dlq
+```
 
-- KV `APP_KV`（binding のみ。id なし）
+無い状態で deploy すると失敗します。ローカルから同じ deploy をするときは、`npx wrangler login` のあと `npx wrangler deploy` です。
+
+最初の deploy が次を作ります。id は設定に書きません。Git からの deploy では、作られた id はダッシュボードに残り、リポジトリには書き戻されません。
+
+- KV `APP_KV`（binding のみ）
 - Queue `jra-bashira-race`（producer / consumer の名前。id フィールドは無い）
-- Durable Object `BashiraAuth`（`migrations` の `new_sqlite_classes`。SQLite）
+- Durable Object `BashiraAuth`（SQLite。`migrations` の `new_sqlite_classes`）
+- サービスバインディング `BABA`（`jra-dify-pipeline`）
 
-失敗したメッセージの待ち行列 `jra-bashira-race-dlq` は、この deploy では作られません。先に `npx wrangler queues create jra-bashira-race-dlq` を実行してください。無い状態で deploy すると失敗します。
-
-ローカルで同じことをするときは `npx wrangler login` のあと `npx wrangler deploy` です。この作業ではデプロイしません。
-
-## シークレット
-
-次は **手動の Secret** です。値をリポジトリ、コマンド引数、ログに書かないでください。`openssl rand -base64 32` で作った鍵を `TOKEN_ENCRYPTION_KEY` にします。`ACCESS_AUD` は Access アプリケーションの AUD タグで、ダッシュボードの Secret に置きます。`vars` には書きません。
-
-- `GEMINI_API_KEY`
-- `NOTION_TOKEN`
-- `TOKEN_ENCRYPTION_KEY`
-- `ACCESS_AUD`
-
-Worker がまだ無い状態では `wrangler secret put` もダッシュボードもシークレットを先に置けないため、`secrets.required` は設定していません。最初の deploy が Worker を作ったあと、ダッシュボードの Settings → Variables and Secrets か、次で入れます。
+Worker ができてから、ダッシュボードの Settings → Variables and Secrets か、次でシークレットを入れます。`secret put` はそれ自体がデプロイです。`ACCESS_AUD` が既にあるときは、その値を上書きしないでください。
 
 ```bash
 npx wrangler secret put GEMINI_API_KEY
@@ -56,269 +107,44 @@ npx wrangler secret put TOKEN_ENCRYPTION_KEY
 npx wrangler secret put ACCESS_AUD
 ```
 
-`secret put` はそれ自体がデプロイになります。レースを動かす前に入れてください。入っていないと実行時に失敗します。`ACCESS_AUD` はダッシュボードで設定済みなら、その値を上書きしないでください。
+入れる名前は `GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY`、`ACCESS_AUD` です。レースを動かす前に 4 つが必要です。入っていないと実行時に失敗します。`secrets.required` は設定していません。Worker がまだ無い状態では、シークレットを先に置けないためです。
 
-ローカルの `wrangler dev` では同じ名前を `.dev.vars` に書きます。`.dev.vars.example` をコピーしてください。`.dev.vars` はコミットしません。
+`/health` の `commit` の決まり方は [docs/operations.md](docs/operations.md) にあります。プルリクエストのプレビュー用ビルドは、Wrangler に `previews` が無いため失敗します。これは既知の問題で、マージ後の本番ビルドとは別です。詳細は [docs/known-issues.md](docs/known-issues.md) です。
 
-`vars` で置き換えるもの:
+## 主なエンドポイント
 
-| 変数 | 内容 |
+| メソッド | パス | 認証 | 役割 |
+| --- | --- | --- | --- |
+| `GET` | `/health` | なし | 生存確認。`commit` と `version_id` を返す |
+| `POST` | `/run` | Access JWT | レース 1 件を積む。受理は 202、処理中は 409 |
+| `GET` | `/oauth/start` | Access JWT | BASHIRA の認可を始める |
+| `GET` | `/oauth/callback` | なし | 認可コードを受け取る。`state` と PKCE で紐づける |
+| `GET` | `/oauth/status` | Access JWT | 認可済みかを返す。トークンは返さない |
+| `GET` | `/admin/jobs` | Access JWT | ジョブの進捗と失敗理由 |
+| `GET` | `/admin/jobs/input` | Access JWT | 予想に渡した馬柱と、馬ごとの解決結果 |
+| `GET` | `/admin/models` | Access JWT | Gemini モデルの一覧と現在値 |
+| `PUT` | `/admin/models` | Access JWT | コース分析またはレース予想のモデルを変える |
+| `POST` | `/admin/models/restore` | Access JWT | 直前のモデル設定に戻す |
+
+`POST /run` のリクエストは [docs/run.md](docs/run.md)、管理用 API は [docs/admin.md](docs/admin.md)、Access の検証は [docs/access.md](docs/access.md) です。
+
+## ドキュメント
+
+プロジェクト全体で変わらない説明は、この README に置きます。仕様、管理用 API、運用、確認の記録は `docs/` です。
+
+| ファイル | 内容 |
 | --- | --- |
-| `ACCESS_TEAM_DOMAIN` | `https://hdsk.cloudflareaccess.com`（`wrangler.jsonc` に設定済み） |
-| `ACCESS_CLIENT_ID_GROK` | Grok Bot の Access サービストークンの Client ID |
-| `ACCESS_CLIENT_ID_MUSE` | Muse の Client ID |
-
-Client Secret は Worker に置きません。Access が検証し、Worker は `Cf-Access-Jwt-Assertion` だけを見ます。
-
-型生成と確認:
-
-```bash
-npm run types
-npm run check
-```
-
-## Cloudflare Access
-
-`/run` と `/admin/*` と `/oauth/start` と `/oauth/status` は Access の JWT が必要です。`/health` と `/oauth/callback` は公開です。callback は `state` と PKCE で紐づけます。
-
-Access アプリケーションを Worker の URL に置き、ポリシーに Grok Bot と Muse のサービストークンを入れます。アプリケーションの AUD は Secret `ACCESS_AUD` です。設定ファイルには書きません。
-
-Worker は次を検証します。
-
-- ヘッダ `Cf-Access-Jwt-Assertion` がある
-- 署名が `https://hdsk.cloudflareaccess.com/cdn-cgi/access/certs` の公開鍵と一致する
-- `iss` が `https://hdsk.cloudflareaccess.com` である
-- `aud` が Secret の `ACCESS_AUD` と一致する
-- 有効期限が切れていない
-
-呼び出し元の記録は、`CF-Access-Client-Id` が `ACCESS_CLIENT_ID_GROK` / `ACCESS_CLIENT_ID_MUSE` と一致すれば「Grok Bot」「Muse」です。一致しなければ JWT の `common_name`（名前に grok / muse を含む場合も同じラベル）か email を使います。Client Secret は読みません。
-
-呼び出し側は、Access の前にサービストークンを付けます。Access が通したリクエストには JWT が付きます。Worker のオリジンへ JWT 無しで直接叩くと 403 です。
-
-## BASHIRA の初回認可
-
-認可は Durable Object `BashiraAuth`（名前 `bashira`）が一つ持ちます。資格情報はレース横断で一つだからです。トークンと PKCE の verifier は `TOKEN_ENCRYPTION_KEY` で AES-GCM 暗号化して保存します。
-
-OAuth は認可コードと PKCE S256 だけです。`client_credentials` は使いません。クライアントは `/register` で動的登録し、`token_endpoint_auth_method=none` です。エンドポイントは protected resource metadata と authorization server metadata から取ります。確認済みの発行元は `https://mcp.bashira.omninode.co.jp/` です。
-
-1. Access を通したブラウザで `GET /oauth/start` を開く。
-2. BASHIRA の認可画面で許可する。
-3. 公開の `GET /oauth/callback` が code をトークンに換える。`state` が不一致、または 10 分超過なら失敗する。
-4. `GET /oauth/status` で `authorized: true` を確認する。トークン自体は返しません。
-
-refresh の寿命とローテーションは未公開です。`expires_in` が無いときは 5 分で期限切れとして扱います。応答に新しい `refresh_token` があるときだけ差し替え、無いときは今の refresh token を残します。保存は応答を受け取ったあとです。refresh が失敗したら予想は止め、`invalid_grant` のときは再認可が必要だと KV のジョブと `/admin/jobs` に残します。通信失敗でもそのジョブは止めます。
-
-MCP の引数は実行時の `tools/list` で確認します。スキーマに無い引数やフィールドは送りません。`2025-06-18` で initialize し、失敗したら `2025-03-26` を試します。
-
-## プロンプト
-
-プロンプトは非公開リポジトリで管理しています。
-
-KV キーは `prompt:v2:course` と `prompt:v2:race` です。値は `{"version","system","user"}` です。以前の `{"text"}` は読みません。Gemini は system を `systemInstruction`、user を `contents` に分けます。レース予想は Markdown を返し、見出しから指数分布・自信度・波乱度・印を取ります。
-
-user 文の差し込みは次の名前です。置換したあとに `{{` が残っていると（`{{name}}` も `{{#…#}}` も）ジョブは失敗します。KV を新しい名前へ替えるまでのあいだ、右の Dify ノード ID にも同じ値を入れます。
-
-### コース特徴（`prompt:v2:course`）
-
-| 差し込み | 入るもの | 出典 | 移行中の Dify トークン |
-| --- | --- | --- | --- |
-| `{{venue}}` | 競馬場 | リクエストの開催場（BASHIRA `get_races` の `race_track`） | `{{#1788717846587.course#}}` |
-| `{{surface}}` | 芝 / ダート / 障害。無いときは「不明」 | BASHIRA `get_races` の `surface` | `{{#1788717846587.type#}}` |
-| `{{distance}}` | 距離（メートルの数値）。無いときは「不明」 | BASHIRA `get_races` の `distance` | `{{#1788717846587.distance#}}` |
-
-### レース予想（`prompt:v2:race`）
-
-| 差し込み | 入るもの | 出典 | 移行中の Dify トークン |
-| --- | --- | --- | --- |
-| `{{umabashira}}` | 馬柱。近走は最大 10 走 | BASHIRA `get_entries`。馬名ごとに `race_meeting_date` 降順で最大 12 行取り、今回のレースと `upcoming` を除いた残り。同名で `name_resolution.status` が `ambiguous` のときは、出馬表の `birth_date` の年と一致する「名 (YYYY)」で 1 回だけ引き直す。それでも決まらなければ近走なしとは書かず、「同名馬のため近走取得不可」と通算出走数・前走着順・前走距離・前走馬場・間隔を書く | `{{#1788721223615.output#}}` |
-| `{{course_analysis}}` | コース分析の本文 | 第 1 段階（course）の出力 | `{{#1788721380442.output#}}` |
-| `{{weather}}` | 天気。どちらも無いときは「不明」 | baba API（`/baba/latest`）を土台にし、BASHIRA `get_races` の `weather` で上書き | `{{#1788103991048.weathre#}}` |
-| `{{condition}}` | 馬場状態。どちらも無いときは「不明」 | baba API の芝/ダート区分を土台にし、BASHIRA `get_races` の `track_condition` で上書き | `{{#1788103991048.condition#}}` |
-| `{{remarks}}` | 備考。両方空のときは「なし」 | `POST /run` の任意の `remarks` と、baba にしか無い詳細（クッション値・含水率・使用コース・芝丈）。日付・場コード・レース番号のサマリを付ける | `{{#1787386477043.remarks#}}` |
-
-get_stats の枠・騎手・父の集計は v1 のプロンプトには入れません。
-
-近走の着順は「4着/14頭」と書きます。`race_abnormality` が「異常なし」のときは着順の代わりに書きません。取消・除外・中止・失格のときだけ、着順の代わりにその区分を書きます。生成後の着順・今回斤量の警告は、その馬の節（印の行、または「N位 馬番 馬名」から次の馬まで）の中だけを見ます。警告には本文の切り出しが付きます。
-
-## モデル
-
-既定は両方 `gemini-flash-latest` です。ジョブごとに KV `config:models` を読み、無ければコードの既定を使います。
-
-`GET /admin/models` は `generateContent` できるモデル一覧（KV に 10 分キャッシュ）と現在値、直前の値を返します。`PUT /admin/models` は一覧にある名前だけを受け入れ、変更前・変更後・呼び出し元・日本時間を `config:models:history` に残します。`POST /admin/models/restore` は直前の設定に戻し、その操作も履歴に残します。
-
-Grok Bot の例（Client Secret はシェル変数に置く）:
-
-```bash
-curl -sS "https://<worker>/admin/models" \
-  -H "CF-Access-Client-Id: $GROK_ACCESS_CLIENT_ID" \
-  -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET"
-```
-
-応答の形:
-
-```json
-{
-  "note": "course はコース分析、race はレース予想に使う Gemini モデルです。",
-  "current": { "course": "gemini-flash-latest", "race": "gemini-flash-latest" },
-  "source": "default",
-  "previous": null,
-  "history_count": 0,
-  "models": [{ "name": "gemini-flash-latest", "displayName": "Gemini Flash", "methods": ["generateContent"] }]
-}
-```
-
-Muse がレース段階だけ変える例:
-
-```bash
-curl -sS -X PUT "https://<worker>/admin/models" \
-  -H "CF-Access-Client-Id: $MUSE_ACCESS_CLIENT_ID" \
-  -H "CF-Access-Client-Secret: $MUSE_ACCESS_CLIENT_SECRET" \
-  -H "content-type: application/json" \
-  -d '{"race":"gemini-flash-latest"}'
-```
-
-応答の形:
-
-```json
-{
-  "note": "モデルを更新しました。履歴には変更前、変更後、呼び出し元、日本時間を残しています。",
-  "current": { "course": "gemini-flash-latest", "race": "gemini-flash-latest" },
-  "previous": { "course": "gemini-flash-latest", "race": "gemini-flash-latest" },
-  "caller": "Muse"
-}
-```
-
-戻す:
-
-```bash
-curl -sS -X POST "https://<worker>/admin/models/restore" \
-  -H "CF-Access-Client-Id: $GROK_ACCESS_CLIENT_ID" \
-  -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET"
-```
-
-`models/gemini-flash-latest` と `gemini-flash-latest` は同じ名前として扱います。一覧に無い名前は 400 で、KV は変わりません。
-
-## 1 レース実行
-
-`race_id` は BASHIRA の `YYYYMMDD-場コード-レース番号` です。場コードは 01 札幌、02 函館、03 福島、04 新潟、05 東京、06 中山、07 中京、08 京都、09 阪神、10 小倉です。
-
-```bash
-curl -sS -X POST "https://<worker>/run" \
-  -H "CF-Access-Client-Id: $GROK_ACCESS_CLIENT_ID" \
-  -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET" \
-  -H "content-type: application/json" \
-  -d '{"race_id":"20261107-03-11"}'
-```
-
-日付と場名でも同じです。両方書いたときは一致している必要があります。配列で複数レースは受け付けません。
-
-```bash
-curl -sS -X POST "https://<worker>/run" \
-  -H "CF-Access-Client-Id: $MUSE_ACCESS_CLIENT_ID" \
-  -H "CF-Access-Client-Secret: $MUSE_ACCESS_CLIENT_SECRET" \
-  -H "content-type: application/json" \
-  -d '{"date":"2026-11-07","venue":"福島","race_number":11}'
-```
-
-受理されると 202 で `race_key` と `run_id` と `requested_by` が返ります。同じレースが処理中なら 409 です。
-
-進捗と失敗理由:
-
-```bash
-curl -sS "https://<worker>/admin/jobs?race_key=20261107-03-11" \
-  -H "CF-Access-Client-Id: $GROK_ACCESS_CLIENT_ID" \
-  -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET"
-```
-
-`phase` が `error` のとき `error` に理由が入ります。refresh 失敗はここに出ます。
-
-予想に渡した馬柱と、馬ごとの解決結果:
-
-```bash
-curl -sS "https://<worker>/admin/jobs/input?race_key=20261108-05-11" \
-  -H "CF-Access-Client-Id: $GROK_ACCESS_CLIENT_ID" \
-  -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET"
-```
-
-`/admin/jobs` と同じ Access JWT が必要です。`horses` は馬名・解決後の名前・`resolution_status`（`unique` / `resolved_by_birth_year` / `unresolved`）・近走数・出馬表の通算出走数、前走着順、前走距離、前走馬場、間隔、今回斤量です。`warnings` は生成後の本文と成績の食い違い（`目黒記念` のようなレース名に続く着順、`今回斤量 57 kg`）で、Notion の本文には書きません。警告があっても公開は止めません。
-
-クエリを付けないときは `umabashira`（馬柱そのもの）と `race_input`（レース予想に渡したユーザー文）も返します。`include=umabashira` は馬柱だけ、`include=input` はユーザー文だけです。本文は KV `input:v1:{raceKey}` にあり、長いときは 10 万文字ごとに分割します（値の上限 25MiB より手前で、50 万文字を超える分は切ります）。
-
-## Notion
-
-データベース id は `3c57c7b2e419808ba999e9c1909fa39c` です。スキーマは変更しません。実行時にプロパティ型を読み、想定と違うときは書かずに止まります。セレクトに無い競馬場・レース番号も、新しい選択肢を作らずに止まります。
-
-2026-11-07 に読んだスキーマ:
-
-| プロパティ | 型 | この Worker が書く値 |
-| --- | --- | --- |
-| 名前 | title | レース名。グレードが G1 / G2 / G3 / L / OP のときは `アルゼンチン共和国杯（G2）` のように全角括弧で足す。平場・その他重賞・空は付けない。レース名が無いときは場とレース番号 |
-| 日付 | date | 開催日 |
-| 競馬場 | select | 開催場（既存の 10 場） |
-| レース | select | レース番号の文字列 `1`〜`12` |
-| 指数分布 | rich_text | 予想 JSON の `指数分布` |
-| 自信度 | rich_text | 予想 JSON の `自信度` |
-| 波乱度 | rich_text | 予想 JSON の `波乱度` |
-
-`予想結果` と `馬券結果` と `メモ` と `URL` は書きません。プロパティの型も増やしません。Dify 版と同じ開催日・競馬場・レース番号のページがあっても、本文のどこにも `BASHIRAで取得` が無いページは更新しません。新規ページを作ります。
-
-ページ id は `notion:page:v1:{raceKey}` に保存します。再実行は、そのページのブロックを 1 件ずつ消して上書きしません。新しいページを作り、本文の追記が終わってから旧ページを `archived: true` でアーカイブします。作成直後に新しい ID をジョブと KV に残すので、追記の途中でサブリクエスト上限に達しても次の呼び出しはそのページを続けます。旧ページは新しい本文が終わるまで残ります。保存したページの日付・場・レースが違うとき、または引き継ぐページ ID が無いのに `BASHIRAで取得` のページが複数あるときは、どれかを選ばずにエラーで止まります。識別は本文の末尾までページングして見ます（先頭 5 ブロックだけではフッターを見落とします）。
-
-本文は Dify の「Notion用にに出力整形」と同じ規則でブロックにします。予想本文の Markdown を見出し（`#` から `####`）、箇条書き（`- ` / `* `）、`**太字**`、区切り線、コードブロックにします。`>` で始まる行は callout（💡、`gray_background`）にし、連続する行は改行で 1 つにまとめます。印は本文に「競馬新聞風印予想」が無いとき `### 競馬新聞風印予想` の箇条書きにします。コース分析と単勝オッズも見出しにします。子ブロックの追加は 100 件ずつです。
-
-`BASHIRAで取得`、実行者、`course_variant: null`、オッズ種別、オッズ観測時刻、指定モデル、応答の `modelVersion`、プロンプト版は本文の先頭には置きません。末尾に区切り線を置き、その下を灰色の段落で書きます。
-
-## コース成績とオッズ
-
-`get_stats` の条件は開催場・馬場（芝 / ダート / 障害）・距離・開催年です。期間の既定はレース年を含む過去 5 年（`STATS_PERIOD_YEARS`）です。`min_starts` の既定は 30、母父だけ 50 です。
-
-取るもの:
-
-- 枠番（1 回、`bracket_number` で分ける）
-- 4 コーナー順位を 4 回に分ける。1〜3、4〜6、7〜10、11 以降
-- そのレースの父（まとめて 1 回）
-- そのレースの母父（`min_starts` 50）
-- 騎手は 1 人ずつ 1 回。取消・除外の馬の騎手は除く
-- 馬場状態
-
-人気（`win_odds_rank`）では集計しません。内・外はデータが無いので `course_variant` は常に null です。`rail_type` や馬場 API の使用コース文言は参考としてプロンプトに渡しますが、内・外には読み替えません。
-
-成績は `stats:v2:` で KV に 7 日キャッシュします。
-
-馬場は `GET https://jra-dify-pipeline.hdsk.workers.dev/baba/latest` をジョブの最初に 1 回だけ取り、そのジョブに渡します。同じアカウントの `workers.dev` へ Worker から global fetch すると届かず 404 になるため、`BABA` サービスバインディング（`jra-dify-pipeline`）があるときは `env.BABA.fetch` で取ります。バインディングが無いテストとローカルでは global fetch に戻します。失敗しても予想は続け、HTTP ステータスと本文の先頭を理由として残します。
-
-オッズは `get_odds` の単勝です。種別（`odds_kind`）と観測時刻を日本時間で必ず残します。行が無いときは未発売、`no_bets` のときは発売票数なし、取得に失敗したときは取得エラーと書きます。取得に失敗しても出馬表に単勝があればそれを使い、その旨を残します。オッズが無くても予想は続けます。
-
-## cron
-
-`wrangler.jsonc` の `triggers` はコメントアウトしています。有効にしても `scheduled` は理由をログして戻り、レースは積みません。時刻を決めたあとに、積む処理を別途足してください。
-
-## テスト
-
-```bash
-npm test
-npm run typecheck
-```
-
-BASHIRA・Gemini・Notion はモックです。実 API へのデプロイや書き込みはしていません。
-
-## この環境で確認できたことと、できていないこと
-
-確認できたこと:
-
-- BASHIRA の認可サーバ metadata（authorization / token / register、PKCE S256、refresh_token、`none`）
-- protected resource metadata（`/.well-known/oauth-protected-resource/mcp`）
-- `POST /register` が公開クライアントを 201 で返すこと
-- 未認証の MCP が 401 と `resource_metadata` を返すこと
-- 接続済み BASHIRA ツールの引数スキーマ（`get_races` / `get_entries` / `get_odds` / `get_stats`）。実行時も `tools/list` で同じ確認をします
-- 馬場 API の JSON（`fetchedAt` と `venues[]`）
-- Notion データベースのプロパティ型と選択肢
-- `get_entries` の `name_resolution`。同名は `status: "ambiguous"` と `candidates[].name`（`マイネルエンペラー (2020)`）、`starts`、`period`。一意な馬は `status: "resolved"`。生年付きの名前を指定し直すと行が返る
-
-確認できていないこと:
-
-- ブラウザでの認可コード交換、refresh の実寿命、refresh token のローテーション有無
-- Worker からの `tools/list` と `tools/call` の実レスポンス。`columns` / `rows` が配列のときとオブジェクトのときの両方を読む
-- Gemini の `models.list` と `generateContent` の実応答。`modelVersion` が無いときはその旨を本文に書く
-- Notion への作成・更新
-- Cloudflare 上での Queue、Durable Object、Access JWT、50 サブリクエスト上限
+| [docs/pipeline.md](docs/pipeline.md) | 段階、Queue、外部呼び出しの上限、ロック、cron |
+| [docs/run.md](docs/run.md) | `POST /run` のリクエストと場コード |
+| [docs/access.md](docs/access.md) | Cloudflare Access の検証と呼び出し元 |
+| [docs/bashira-auth.md](docs/bashira-auth.md) | BASHIRA の OAuth と MCP |
+| [docs/prompts.md](docs/prompts.md) | KV のプロンプト形式と差し込み名。本文は置かない |
+| [docs/umabashira.md](docs/umabashira.md) | 馬柱の書き方 |
+| [docs/same-name-horses.md](docs/same-name-horses.md) | 同じ名前の馬 |
+| [docs/consistency.md](docs/consistency.md) | 予想本文と成績の整合性チェック |
+| [docs/admin.md](docs/admin.md) | 管理用エンドポイント |
+| [docs/notion.md](docs/notion.md) | Notion のプロパティ、ページの作り方、本文のブロック |
+| [docs/course-odds.md](docs/course-odds.md) | コース集計、馬場、単勝オッズ |
+| [docs/operations.md](docs/operations.md) | シークレット、ビルドの commit、テスト |
+| [docs/verification.md](docs/verification.md) | 以前の環境で確認できたことと、できていないこと |
+| [docs/known-issues.md](docs/known-issues.md) | 既知の問題 |
