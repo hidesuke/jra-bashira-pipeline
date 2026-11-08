@@ -11,6 +11,7 @@ export const RACE_USER_PLACEHOLDERS = {
   remarks: "{{remarks}}",
   past_runs: "{{past_runs}}",
   course_records: "{{course_records}}",
+  runner_stats: "{{runner_stats}}",
   win_odds: "{{win_odds}}",
 } as const;
 
@@ -23,6 +24,7 @@ export type RaceUserValues = {
   remarks: string;
   past_runs: string;
   course_records: string;
+  runner_stats: string;
   win_odds: string;
 };
 
@@ -49,7 +51,7 @@ export function fillRaceUser(template: string, values: RaceUserValues): string {
 }
 
 /**
- * user にまだ無いものだけ先頭へ足す。順は race_facts、past_runs、course_records。
+ * user にまだ無いものだけ先頭へ足す。順は race_facts、past_runs、course_records、runner_stats。
  * win_odds は置かれたときだけ入れる。無いプロンプトへは足さない。
  */
 function leadingBlocks(template: string, values: RaceUserValues): string[] {
@@ -57,6 +59,7 @@ function leadingBlocks(template: string, values: RaceUserValues): string[] {
     { token: RACE_USER_PLACEHOLDERS.race_facts, text: values.race_facts },
     { token: RACE_USER_PLACEHOLDERS.past_runs, text: values.past_runs },
     { token: RACE_USER_PLACEHOLDERS.course_records, text: values.course_records },
+    { token: RACE_USER_PLACEHOLDERS.runner_stats, text: values.runner_stats },
   ];
   return blocks.flatMap((block) => {
     if (template.includes(block.token)) return [];

@@ -24,7 +24,7 @@
 2. Consumer がメッセージを 1 件ずつ進める。段階は、出走と馬場の収集、馬ごとの近走、コース集計、Gemini、Notion への書き込みです。
 3. 同じレースを再実行するときは、前の BASHIRA ページをアーカイブし、同じ書式で新しいページを作ります。
 
-段階の分割、外部呼び出しの上限、同じレースのロックは [docs/pipeline.md](docs/pipeline.md) に書いてあります。種牡馬・母父・騎手などのコース集計（`get_stats` のキャッシュ）は、コース分析にもレース予想にも渡しません。コース分析には、別に計算したコースデータ要約だけを渡します。差し込み名は [docs/prompts.md](docs/prompts.md)、集計の中身は [docs/course-odds.md](docs/course-odds.md) です。
+段階の分割、外部呼び出しの上限、同じレースのロックは [docs/pipeline.md](docs/pipeline.md) に書いてあります。枠・4角・馬場状態のコース集計（`get_stats` のキャッシュ）は、コース分析にもレース予想にも渡しません。コース分析には、別に計算したコースデータ要約を渡します。レース予想には、父・母の父・騎手のこのコースの成績を `{{runner_stats}}` で渡します。差し込み名は [docs/prompts.md](docs/prompts.md)、集計の中身は [docs/course-odds.md](docs/course-odds.md) です。
 
 プロンプト本文を KV へ入れる手順は、このリポジトリにはありません。Worker が読むのは、KV に入っている `{"version","system","user"}` だけです。差し込み名は [docs/prompts.md](docs/prompts.md) です。
 
@@ -135,7 +135,7 @@ npx wrangler secret put NOTIFY_WEBHOOK_KEY
 | `GET` | `/oauth/callback` | なし | 認可コードを受け取る。`state` と PKCE で紐づける |
 | `GET` | `/oauth/status` | Access JWT | 認可済みかを返す。トークンは返さない |
 | `GET` | `/admin/jobs` | Access JWT | ジョブの進捗と失敗理由。Gemini の `finishReason`、`modelVersion`、トークン数。コース分析は検索クエリも |
-| `GET` | `/admin/jobs/input` | Access JWT | 予想に渡した馬柱と、馬ごとの解決結果。`include=past_runs` は近10走とコース成績だけ |
+| `GET` | `/admin/jobs/input` | Access JWT | 予想に渡した馬柱と、馬ごとの解決結果。`include=past_runs` は近10走、コース成績、出走馬のコース成績だけ |
 | `GET` | `/admin/inspect` | Access JWT | レースの馬柱、LLM の入出力、呼び出し結果。`format=markdown` は人が読む形。`date` はその日の一覧 |
 | `GET` | `/admin/models` | Access JWT | Gemini モデルの一覧と現在値 |
 | `PUT` | `/admin/models` | Access JWT | コース分析またはレース予想のモデルを変える |

@@ -30,11 +30,12 @@ import { numberField, rowsToObjects, stringField } from "./rows";
 import { ambiguousNameMessage } from "./bashira/mcp";
 import { savePredictInput, type StoredRelatedCourses } from "./predict-input";
 import { careerHorses, loadPastPerformance, renderCourseRecords, renderPastRuns, renderRelatedCoursesLine, type CareerHorse } from "./past-runs";
+import { collectRunnerStats, RUNNER_STATS_HEADING } from "./runner-stats";
 import { buildRaceFacts } from "./race-facts";
 import { relatedCoursesGap, stripRelatedCourses } from "./related-courses";
 import { horseFactGaps, renderUmabashira } from "./umabashira";
 import type { BashiraPort } from "./bashira/port";
-import { assertFields, assertToolArgs, catalogFromTools, selectColumns } from "./schema";
+import { assertFields, assertToolArgs, catalogFromTools, selectColumns, type ToolCatalog } from "./schema";
 import { buildStatTasks, hydrateStatCache, writeStatCache, yearFrom } from "./stats";
 import {
   errorMessage,
@@ -550,12 +551,13 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
     const current = surface && distance != null ? { track: state.race.venue, surface, distance } : null;
     const related = strippedCourse.parse.status === "ok" ? strippedCourse.parse.courses : null;
     const courseRecords = renderCourseRecords({ race: state.race, horses, rows: performance.rows, current, related });
+    const runner = await loadRunnerStats(state, deps, surface, distance, performance.catalog);
     const umabashira = renderUmabashira({ race: state.race, entries: state.entries, formTasks: state.formTasks ?? [] });
     const snapshots = horseFormSnapshots(state.entries, state.formTasks ?? []);
     const facts = buildRaceFacts({ raceRow: state.raceRow, entries: state.entries });
     state.raceInputGaps = [...facts.gaps, ...horseFactGaps(state.entries)];
     if (relatedGap) state.raceInputGaps.push(relatedGap);
-    state.raceInputGaps.push(...performance.gaps);
+    state.raceInputGaps.push(...performance.gaps, ...runner.gaps);
     const raceInput = fillRaceUser(racePrompt.user, {
       race_facts: facts.text,
       umabashira,
@@ -565,6 +567,7 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       remarks: composeRemarks(state.remarks ?? "", going.babaDetail, state.race),
       past_runs: pastRuns,
       course_records: courseRecords,
+      runner_stats: runner.text,
       win_odds: renderWinOddsText(state.entries, state.odds),
     });
     const relatedCourses: StoredRelatedCourses = {
@@ -583,6 +586,7 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       pastRuns,
       courseRecords,
       relatedCourses,
+      runnerStats: runner.text,
     });
     state.predictInput = { stored: true, ...stored };
     const race = await generateText({
@@ -649,14 +653,21 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
  * Notion 段では呼ばない。Worker の外部 fetch 予算（45）には、DO 経由の BASHIRA を数えない。
  */
 async function loadRacePastPerformance(state: JobState, deps: PipelineDeps, horses: CareerHorse[]) {
-  if (!horses.some((horse) => !horse.unresolved)) {
-    return { rows: [], paces: new Map<string, { first3f: number | null; last3f: number | null }>(), gaps: [], careerCalls: 0, paceCalls: 0 };
-  }
+  const empty = {
+    rows: [] as Record<string, unknown>[],
+    paces: new Map<string, { first3f: number | null; last3f: number | null }>(),
+    gaps: [] as string[],
+    careerCalls: 0,
+    paceCalls: 0,
+    catalog: null as ToolCatalog | null,
+  };
+  if (!horses.some((horse) => !horse.unresolved)) return empty;
   const listed = await deps.bashira.listTools();
   if (!listed.ok) throw toolError(listed);
+  const catalog = catalogFromTools(listed.tools);
   const performance = await loadPastPerformance({
     bashira: deps.bashira,
-    catalog: catalogFromTools(listed.tools),
+    catalog,
     race: state.race,
     horses,
   });
@@ -666,7 +677,60 @@ async function loadRacePastPerformance(state: JobState, deps: PipelineDeps, hors
     paceCalls: performance.paceCalls,
     gaps: performance.gaps.length,
   });
-  return performance;
+  return { ...performance, catalog };
+}
+
+/**
+ * 父・母の父は配列で各 1 回（曖昧なら生年付きでもう 1 回）。
+ * 騎手は KV（コース × 騎手 × data_version）を読み、無いときだけ get_stats する。
+ * 失敗しても予想は止めない。
+ */
+async function loadRunnerStats(
+  state: JobState,
+  deps: PipelineDeps,
+  surface: string | null,
+  distance: number | null,
+  catalog: ToolCatalog | null,
+): Promise<{ text: string; gaps: string[] }> {
+  if (!surface || distance == null) {
+    return {
+      text: `${RUNNER_STATS_HEADING}\n取得できませんでした（馬場種類または距離が無い）。`,
+      gaps: ["出走馬のコース成績（馬場種類または距離が無い）"],
+    };
+  }
+  let tools = catalog;
+  if (!tools) {
+    const listed = await deps.bashira.listTools();
+    if (!listed.ok) {
+      return {
+        text: `${RUNNER_STATS_HEADING}\n取得できませんでした（${listed.message}）。`,
+        gaps: [`出走馬のコース成績（${listed.message}）`],
+      };
+    }
+    tools = catalogFromTools(listed.tools);
+  }
+  const result = await collectRunnerStats({
+    bashira: deps.bashira,
+    catalog: tools,
+    kv: deps.kv,
+    entries: state.entries,
+    venue: state.race.venue,
+    surface,
+    distance,
+    raceDate: state.race.date,
+    periodYears: deps.config.statsPeriodYears,
+    minCount: deps.config.courseSummaryMinCount,
+    now: deps.now().toISOString(),
+  });
+  deps.log?.("runner_stats_fetch", {
+    raceKey: state.race.raceKey,
+    calls: result.calls,
+    cacheHits: result.cacheHits,
+    scope: result.scope,
+    dataVersion: result.dataVersion,
+    gaps: result.gaps.length,
+  });
+  return result;
 }
 
 async function runNotion(state: JobState, deps: PipelineDeps): Promise<void> {

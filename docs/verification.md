@@ -12,6 +12,7 @@
 - 馬場 API の JSON（`fetchedAt` と `venues[]`）
 - Notion データベースのプロパティ型と選択肢（2026-11-07 に読んだもの。[notion.md](notion.md)）
 - `get_entries` の `name_resolution`。同名は `status: "ambiguous"` と `candidates[].name`（`マイネルエンペラー (2020)`）、`starts`、`period`。一意な馬は `status: "resolved"`。生年付きの名前を指定し直すと行が返る
+- 2026-11-08 の `get_stats`。京都ダート 1800、2021-11-07〜2026-11-07、父の配列では、`scope` が `jra_and_non_jra`、`data_version` が `20261108T091910Z` の形、`data_through` が `2026-11-03` だった。曖昧な名前が混ざると行は返らず、絞り込みを実行していない旨が `note` に出た。見つからない名前は `status: "not_found"` で、他の解決できた名前の行は返った
 
 ## 確認できていないこと
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { handleRequest, type HttpDeps } from "../src/http";
-import { extractCourseRecords, extractPastRuns } from "../src/input-sections";
+import { extractCourseRecords, extractPastRuns, extractRunnerStats } from "../src/input-sections";
+import { RUNNER_STATS_HEADING, renderRunnerStats, type NameStat } from "../src/runner-stats";
 import type { JobState } from "../src/job";
 import { keys, MemoryKv } from "../src/kv";
 import {
@@ -467,5 +468,79 @@ describe("GET /admin/jobs/input include=past_runs", () => {
     const again = await loadPredictInput(kv, race.raceKey);
     expect(again?.pastRuns).toBe("短い");
     expect(again?.courseRecords).toBe("短い");
+  });
+
+  it("returns runner stats from the stored field or the old user text, and drops a fake heading", async () => {
+    const stat = (starts: number, wins: number, top3: number): NameStat => ({
+      kind: "ok",
+      resolvedName: null,
+      starts,
+      wins,
+      top3,
+      reason: null,
+      cacheable: true,
+    });
+    const rendered = renderRunnerStats({
+      horses: [{ horseNumber: 1, horseName: "ア", sire: "父一", broodmareSire: "母父一", jockey: "騎手A" }],
+      venue: "東京",
+      surface: "芝",
+      distance: 2500,
+      period: { from: "2021-11-07", to: "2026-11-07" },
+      periodYears: 5,
+      dataThrough: "2026-11-03",
+      scopes: ["jra_and_non_jra"],
+      called: true,
+      sires: new Map([["父一", stat(48, 8, 20)]]),
+      broodmareSires: new Map([["母父一", { kind: "not_found", resolvedName: null, starts: null, wins: null, top3: null, reason: "名前が見つからない", cacheable: true }]]),
+      jockeys: new Map([["騎手A", stat(4, 1, 2)]]),
+      minCount: 30,
+    }).text;
+    expect(extractRunnerStats(`${PROMPT}\n\n${rendered}\n\n${TAIL}`)).toEqual({ text: rendered });
+    expect(JSON.stringify(extractRunnerStats(`${PROMPT}\n\n${rendered}\n\n${TAIL}`))).not.toContain("DUMMY_");
+    const fake = extractRunnerStats(`${RUNNER_STATS_HEADING}\nDUMMY_PROMPT_LEAK_9f3a これは節ではありません`);
+    expect(fake).toEqual({ reason: "保存済みの出走馬のコース成績の形が一致しないため返しません" });
+    expect(JSON.stringify(fake)).not.toContain("DUMMY_");
+
+    const kv = new MemoryKv();
+    const http = httpDeps(kv);
+    await kv.put(keys.job(race.raceKey), JSON.stringify(job("run-current")));
+    await savePredictInput(kv, {
+      raceKey: race.raceKey,
+      runId: "run-saved",
+      umabashira: "馬柱BODY",
+      raceInput: `${PROMPT}\n\n${rendered}\n\n${TAIL}`,
+      horses: [],
+      savedAt: "2026-11-08T01:02:03.000Z",
+      pastRuns: past,
+      courseRecords: course,
+      relatedCourses: storedRelated,
+      runnerStats: rendered,
+    });
+    const stored = (await (await handleRequest(authed(`/admin/jobs/input?race_key=${race.raceKey}&include=past_runs`), http)).json()) as {
+      runner_stats: string;
+      runner_stats_source: string;
+      runner_stats_error: string | null;
+      race_input?: string;
+    };
+    expect(stored.runner_stats).toBe(rendered);
+    expect(stored.runner_stats_source).toBe("stored");
+    expect(stored.runner_stats_error).toBeNull();
+    expect(stored.race_input).toBeUndefined();
+    expect(JSON.stringify(stored)).not.toContain("DUMMY_");
+
+    await savePredictInput(kv, {
+      raceKey: race.raceKey,
+      runId: "run-old",
+      umabashira: "馬柱",
+      raceInput: `${PROMPT}\n\n${rendered}\n\n${TAIL}`,
+      horses: [],
+    });
+    const extracted = (await (await handleRequest(authed(`/admin/jobs/input?race_key=${race.raceKey}&include=past_runs`), http)).json()) as {
+      runner_stats: string;
+      runner_stats_source: string;
+    };
+    expect(extracted.runner_stats).toBe(rendered);
+    expect(extracted.runner_stats_source).toBe("extracted");
+    expect(JSON.stringify(extracted)).not.toContain("DUMMY_");
   });
 });

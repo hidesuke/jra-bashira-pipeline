@@ -231,6 +231,9 @@ function harness(options?: {
     },
     async callTools(calls) {
       statBatches.push(calls.length);
+      if (calls.length > 0 && calls.every((call) => isRunnerStatsCall(call.args))) {
+        return { ok: true, results: calls.map((call) => runnerStatsPayload(call.args)) };
+      }
       const summary = calls.some((call) => JSON.stringify(call.args).includes("race_meeting_date"));
       if (summary && options?.summaryError) {
         return { ok: false, code: "upstream", retryable: true, message: "course summary down", results: [] };
@@ -462,6 +465,44 @@ function raceUser(style: PromptStyle): string {
   return [tokens.umabashira, tokens.course_analysis, tokens.weather, tokens.condition, tokens.remarks].join("\n");
 }
 
+function isRunnerStatsCall(args: Record<string, unknown>): boolean {
+  const filters = (args.filters ?? {}) as Record<string, unknown>;
+  if (filters.race_meeting_date == null) return false;
+  return "sire_name" in filters || "broodmare_sire_name" in filters || "jockey_name" in filters;
+}
+
+function runnerStatsPayload(args: Record<string, unknown>): unknown {
+  const filters = (args.filters ?? {}) as Record<string, unknown>;
+  const field = "sire_name" in filters ? "sire_name" : "broodmare_sire_name" in filters ? "broodmare_sire_name" : "jockey_name";
+  const raw = filters[field];
+  const names = Array.isArray(raw) ? raw.map(String) : [String(raw)];
+  const shared = {
+    scope: "jra_and_non_jra",
+    data_through: "2026-11-03",
+    data_version: "20261108T091910Z",
+    truncated: false,
+  };
+  if (field === "jockey_name") {
+    return {
+      ...shared,
+      columns: ["starts", "wins", "top3"],
+      rows: [[40, 8, 15]],
+      name_resolution: [{ field, query: names[0], status: "resolved", candidates: [{ name: names[0], starts: 100 }] }],
+    };
+  }
+  return {
+    ...shared,
+    columns: [field, "starts", "wins", "top3"],
+    rows: names.map((name) => [name, 48, 8, 20]),
+    name_resolution: names.map((name) => ({
+      field,
+      query: name,
+      status: "resolved",
+      candidates: [{ name, starts: 10 }],
+    })),
+  };
+}
+
 function courseSummaryPayload(args: Record<string, unknown>): unknown {
   const filters = (args.filters ?? {}) as Record<string, unknown>;
   const dimensions = args.dimensions as string[] | undefined;
@@ -515,7 +556,7 @@ describe("pipeline", () => {
     const start: JobMessage = { kind: "start", runId: "run-1", race, requestedBy: "Grok Bot" };
     const results = await drain(env, start);
     expect(results.every((result) => result === "ack")).toBe(true);
-    expect(env.statBatches).toEqual([8, 1, 8]);
+    expect(env.statBatches).toEqual([8, 1, 8, 2, 1]);
     expect(env.geminiBodies).toHaveLength(2);
     const courseBody = env.geminiBodies[0] as {
       systemInstruction?: { parts?: Array<{ text?: string }> };
@@ -619,6 +660,17 @@ describe("pipeline", () => {
     ]);
     expect(raceUser).toContain("# 過去走（近10走）");
     expect(raceUser).toContain("# コース成績");
+    expect(raceUser.indexOf("# コース成績")).toBeLessThan(raceUser.indexOf("# 出走馬のコース成績"));
+    expect(raceUser.indexOf("# 出走馬のコース成績")).toBeLessThan(raceUser.indexOf("# 馬柱"));
+    expect(raceUser).toContain("期間: 2021-11-06〜2026-11-06（レース日の前日までの過去5年）");
+    expect(raceUser).toContain("scope: jra_and_non_jra");
+    const runnerBlock = raceUser.slice(raceUser.indexOf("# 出走馬のコース成績"), raceUser.indexOf("# 馬柱"));
+    expect(runnerBlock).toContain("父 父一: 出走 48　勝ち 8　勝率 16.7%　複勝 20　複勝率 41.7%");
+    expect(runnerBlock).toContain("母父 母父一: 出走 48　勝ち 8　勝率 16.7%　複勝 20　複勝率 41.7%");
+    expect(runnerBlock).toContain("騎手 騎手A: 出走 40　勝ち 8　勝率 20.0%　複勝 15　複勝率 37.5%");
+    expect(runnerBlock).not.toContain("父二");
+    expect(runnerBlock).not.toContain("騎手B");
+    expect(runnerBlock).not.toContain("### 2");
     expect(raceUser).not.toContain("# 単勝オッズ");
     expect(bodyText).not.toContain("### 単勝オッズ");
     expect(job.courseSummary?.status).toBe("ok");
@@ -718,6 +770,9 @@ describe("pipeline", () => {
     expect(storedInput?.pastRuns && raceUser.includes(storedInput.pastRuns)).toBe(true);
     expect(storedInput?.courseRecords && raceUser.includes(storedInput.courseRecords)).toBe(true);
     expect(storedInput?.pastRuns).not.toContain("予測システム");
+    expect(storedInput?.runnerStats && raceUser.includes(storedInput.runnerStats)).toBe(true);
+    expect(storedInput?.runnerStats).toContain("# 出走馬のコース成績");
+    expect(storedInput?.runnerStats).not.toContain("予測システム");
     expect(storedInput?.pastRuns).not.toContain("<<<");
     expect(storedInput?.courseRecords).not.toContain("<<<");
     expect(storedInput?.relatedCourses).toEqual({

@@ -259,6 +259,7 @@ describe("race prompt variables and notion order", () => {
     remarks: "なし",
     past_runs: "# 過去走（近10走）\n表",
     course_records: "# コース成績\n同じコース: (1,0,0,0,0,0)",
+    runner_stats: "# 出走馬のコース成績\n父 父一: 出走 48　勝ち 8　勝率 16.7%　複勝 20　複勝率 41.7%",
     win_odds: "# 単勝オッズ\n観測時刻: 2026-11-07T15:04:00+09:00\n種別: 最終\n1 ア: 3.1\n2 イ: ",
   };
 
@@ -273,15 +274,17 @@ describe("race prompt variables and notion order", () => {
     const filled = fillRaceUser(legacy, values);
     expect(filled.startsWith("# レース情報")).toBe(true);
     expect(filled.indexOf("# 過去走（近10走）")).toBeLessThan(filled.indexOf("# 馬柱"));
-    expect(filled.indexOf("# コース成績")).toBeLessThan(filled.indexOf("# 馬柱"));
+    expect(filled.indexOf("# コース成績")).toBeLessThan(filled.indexOf("# 出走馬のコース成績"));
+    expect(filled.indexOf("# 出走馬のコース成績")).toBeLessThan(filled.indexOf("# 馬柱"));
     expect(filled).not.toContain("# 単勝オッズ");
     expect(filled).not.toContain("{{");
     const placed = fillRaceUser(
-      `${RACE_USER_PLACEHOLDERS.past_runs}\n${RACE_USER_PLACEHOLDERS.course_records}\n${RACE_USER_PLACEHOLDERS.win_odds}\n${RACE_USER_PLACEHOLDERS.race_facts}`,
+      `${RACE_USER_PLACEHOLDERS.past_runs}\n${RACE_USER_PLACEHOLDERS.course_records}\n${RACE_USER_PLACEHOLDERS.runner_stats}\n${RACE_USER_PLACEHOLDERS.win_odds}\n${RACE_USER_PLACEHOLDERS.race_facts}`,
       values,
     );
     expect(placed.indexOf("# 過去走（近10走）")).toBe(placed.lastIndexOf("# 過去走（近10走）"));
     expect(placed.indexOf("# コース成績")).toBe(placed.lastIndexOf("# コース成績"));
+    expect(placed.indexOf("# 出走馬のコース成績")).toBe(placed.lastIndexOf("# 出走馬のコース成績"));
     expect(placed).toContain("1 ア: 3.1");
     expect(placed).toContain("2 イ: ");
     expect(placed.startsWith("# 過去走（近10走）")).toBe(true);

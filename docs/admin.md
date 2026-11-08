@@ -63,7 +63,7 @@ curl -sS "https://<worker>/admin/jobs/input?race_key=20261108-05-11" \
 | `race_key` / `run_id` / `phase` | ジョブの識別 |
 | `checked` | 整合性チェックを実行済みか。予想の前は false |
 | `stored` | 馬柱とユーザー文を KV に書けたか |
-| `truncated` | 馬柱、ユーザー文、近10走、コース成績のいずれかを 50 万文字で切ったか |
+| `truncated` | 馬柱、ユーザー文、近10走、コース成績、出走馬のコース成績のいずれかを 50 万文字で切ったか |
 | `incomplete` | 分割した片方が KV から読めなかったか |
 | `umabashira_bytes` / `race_input_bytes` | UTF-8 のバイト数。未保存なら null |
 | `warnings` | 整合性チェックの警告。Notion には書かない |
@@ -75,7 +75,7 @@ curl -sS "https://<worker>/admin/jobs/input?race_key=20261108-05-11" \
 
 クエリを付けないときは `umabashira`（馬柱そのもの）と `race_input`（レース予想に渡したユーザー文）も返します。`include=umabashira` は馬柱だけ、`include=input` はユーザー文だけです。カンマで両方を指定できます。知らない名前は無視し、その本文は返しません。`horses` と `warnings` は `include` に関係なく返します。`horses` の `past_runs` は、これまでどおり短い成績の配列です。
 
-`include=past_runs` は、一次予想に渡した近10走とコース成績の Markdown だけを足します。プロンプト文、馬柱、ユーザー文の残りは返しません。`include` に `umabashira` や `input` が無いときは、その本文の欄自体を付けません。クエリを付けないときの応答には、近10走の欄を足しません。
+`include=past_runs` は、一次予想に渡した近10走、コース成績、出走馬のコース成績の Markdown だけを足します。プロンプト文、馬柱、ユーザー文の残りは返しません。`include` に `umabashira` や `input` が無いときは、その本文の欄自体を付けません。クエリを付けないときの応答には、これらの欄を足しません。
 
 ```bash
 curl -sS "https://<worker>/admin/jobs/input?race_key=20261108-05-11&include=past_runs" \
@@ -91,9 +91,10 @@ curl -sS "https://<worker>/admin/jobs/input?race_key=20261108-05-11&include=past
 | `saved_at` | 入力を書いた時刻。ISO 8601。この欄を足す前の保存は null |
 | `past_runs` | `{{past_runs}}` に渡した Markdown。取れなければ null |
 | `course_records` | `{{course_records}}` に渡した Markdown。取れなければ null |
+| `runner_stats` | `{{runner_stats}}` に渡した Markdown。取れなければ null |
 | `related_courses` | コース分析の末尾から読んで、コース成績に使った一覧。取れなければ null |
-| `past_runs_source` / `course_records_source` / `related_courses_source` | `stored` は保存時の別フィールド。`extracted` は古いユーザー文から切り出した。無いときは null |
-| `past_runs_error` / `course_records_error` / `related_courses_error` | その本文や一覧を返せない理由。本文を返せたときは null。一覧だけ読めないときは `related_courses_error` に理由を残し、`courses` は null |
+| `past_runs_source` / `course_records_source` / `runner_stats_source` / `related_courses_source` | `stored` は保存時の別フィールド。`extracted` は古いユーザー文から切り出した。無いときは null |
+| `past_runs_error` / `course_records_error` / `runner_stats_error` / `related_courses_error` | その本文や一覧を返せない理由。本文を返せたときは null。一覧だけ読めないときは `related_courses_error` に理由を残し、`courses` は null |
 
 `related_courses` は `status`、`courses`、`dropped`、`line` です。`courses` の 1 件は `track`、`surface`、`distance` です。`status` が `ok` のとき `courses` は数えた一覧で、空配列は「関連コース: なし」です。一覧が無い、閉じていない、読めないときは `courses` を null にします。空欄を `(0,0,0,0,0,0)` にはしません。`line` はコース成績に書いた「関連コース:」の行で、原文のままです。`dropped` は、5 件を超えて捨てた行数です。古い入力から行だけ読んだときは null です。
 
@@ -109,6 +110,7 @@ curl -sS "https://<worker>/admin/jobs/input?race_key=20261108-05-11&include=past
   "saved_at": "2026-11-08T06:00:00.000Z",
   "past_runs": "# 過去走（近10走）\n…\n\n### 1 ア\n| 日付 | … | 人気 | 単勝 | 前半3F | 後半3F |\n| --- | … | --- | --- | --- | --- |\n| 2026-10-12 | … |  |  |  |  |",
   "course_records": "# コース成績\n…\n関連コース: 東京,芝,2400\n\n### 1 ア\n同じコース: (1,0,0,0,0,0)\n同じ競馬場: (1,0,0,0,0,0)\n関連コース: (0,0,0,0,0,1)",
+  "runner_stats": "# 出走馬のコース成績\n条件: 東京 芝 2500m\n期間: 2021-11-07〜2026-11-07（レース日の前日までの過去5年）\nscope: jra_and_non_jra。条件の競馬場名は中央の開催場で、地方の同名場は別の名前なので、この件数は中央のそのコースの走。\n率は出走数と勝ち数・3着以内の件数から計算した。\n\n### 1 ア\n父 父一: 出走 48　勝ち 8　勝率 16.7%　複勝 20　複勝率 41.7%\n母父 母父一: 名前が見つからない\n騎手 騎手A: 出走 4　勝ち 1　勝率 25.0%　複勝 2　複勝率 50.0% 件数が少ないため参考値",
   "related_courses": {
     "status": "ok",
     "courses": [{ "track": "東京", "surface": "芝", "distance": 2400 }],
@@ -117,18 +119,20 @@ curl -sS "https://<worker>/admin/jobs/input?race_key=20261108-05-11&include=past
   },
   "past_runs_source": "stored",
   "course_records_source": "stored",
+  "runner_stats_source": "stored",
   "related_courses_source": "stored",
   "past_runs_error": null,
   "course_records_error": null,
+  "runner_stats_error": null,
   "related_courses_error": null
 }
 ```
 
 一覧が読めない保存では、`related_courses.status` は `ok` 以外、`courses` は null、`related_courses_error` に理由が入ります。各馬の `関連コース:` は括弧の無い空欄のままです。
 
-この変更以降の保存は、メタに `pastRuns`、`courseRecords`、`relatedCourses`、`savedAt` を別フィールドで書きます。プロンプト文は入れません。応答はその文字列をそのまま返します。それより前のジョブは別フィールドが無いので、保存済みの `raceInput` から `# 過去走（近10走）` と `# コース成績` だけを切り出します。切り出すのは、見出しの次の説明と、馬ごとの行が保存形式と一致する範囲だけです。見出しが無い、形が一致しない、ユーザー文の分割が欠けているときは null と理由を返し、前後の文は返しません。関連コースは、コース成績の `関連コース:` 行から読みます。ユーザー文のほかの場所に区切りが残っていても、その生テキストは返しません。
+この変更以降の保存は、メタに `pastRuns`、`courseRecords`、`runnerStats`、`relatedCourses`、`savedAt` を別フィールドで書きます。プロンプト文は入れません。応答はその文字列をそのまま返します。それより前のジョブは別フィールドが無いので、保存済みの `raceInput` から `# 過去走（近10走）`、`# コース成績`、`# 出走馬のコース成績` だけを切り出します。切り出すのは、見出しの次の説明と、馬ごとの行が保存形式と一致する範囲だけです。見出しが無い、形が一致しない、ユーザー文の分割が欠けているときは null と理由を返し、前後の文は返しません。関連コースは、コース成績の `関連コース:` 行から読みます。ユーザー文のほかの場所に区切りが残っていても、その生テキストは返しません。`runnerStats` が無い保存で、ユーザー文にもその見出しが無いときは、`runner_stats` は null で、理由だけ返します。
 
-本文は KV `input:v1:{raceKey}` にあります。馬柱、ユーザー文、近10走、コース成績を JSON にした長さが 10 万文字を超えるときは、10 万文字ごとに `input:v1:{raceKey}:u:{n}`、`input:v1:{raceKey}:r:{n}`、`input:v1:{raceKey}:p:{n}`、`input:v1:{raceKey}:c:{n}` へ分けます。値の上限 25MiB より手前で、それぞれ 50 万文字を超える分は切り、末尾に切り詰めた旨を付けます。切ったときは `truncated` が true です。近10走かコース成績の分割が欠けているときは、その本文は null とし、欠けたユーザー文から切り出しません。
+本文は KV `input:v1:{raceKey}` にあります。馬柱、ユーザー文、近10走、コース成績、出走馬のコース成績を JSON にした長さが 10 万文字を超えるときは、10 万文字ごとに `input:v1:{raceKey}:u:{n}`、`input:v1:{raceKey}:r:{n}`、`input:v1:{raceKey}:p:{n}`、`input:v1:{raceKey}:c:{n}`、`input:v1:{raceKey}:s:{n}` へ分けます。値の上限 25MiB より手前で、それぞれ 50 万文字を超える分は切り、末尾に切り詰めた旨を付けます。切ったときは `truncated` が true です。近10走、コース成績、出走馬のコース成績の分割が欠けているときは、その本文は null とし、欠けたユーザー文から切り出しません。
 
 ## モデル
 
@@ -229,7 +233,7 @@ curl -sS "https://<worker>/admin/inspect?date=2026-11-08" \
 | `umabashira` | LLM に渡した馬柱。未保存なら null |
 | `course.user_text` / `course.prompt_version` | コース分析のユーザー文とプロンプト版 |
 | `course.output_text` | コース分析の全文。Notion で切り詰める前 |
-| `race_prediction.user_text` / `race_prediction.prompt_version` | レース予想のユーザー文とプロンプト版。ユーザー文にはレース情報、近10走、コース成績が入る。`{{win_odds}}` はプロンプトに書いてあるときだけ |
+| `race_prediction.user_text` / `race_prediction.prompt_version` | レース予想のユーザー文とプロンプト版。ユーザー文にはレース情報、近10走、コース成績、出走馬のコース成績（父・母の父・騎手）が入る。`{{win_odds}}` はプロンプトに書いてあるときだけ |
 | `race_input_gaps` | その入力で空欄にした項目。予想の前は null |
 | `race_prediction.output_text` | レース予想のモデル出力全文 |
 | `race_prediction.予想本文` | 保存した予想本文。見出しから読んだあとの本文 |

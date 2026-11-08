@@ -38,9 +38,12 @@ export interface PredictInputRecord {
   /** 別フィールドが無い古い保存は null。state が absent。 */
   pastRuns: string | null;
   courseRecords: string | null;
+  /** 別フィールドが無い保存は null。state が absent。 */
+  runnerStats: string | null;
   relatedCourses: StoredRelatedCourses | null;
   pastRunsState: StoredSectionState;
   courseRecordsState: StoredSectionState;
+  runnerStatsState: StoredSectionState;
 }
 
 interface StoredMeta {
@@ -55,14 +58,16 @@ interface StoredMeta {
   raceInput?: string;
   pastRuns?: string;
   courseRecords?: string;
+  runnerStats?: string;
   relatedCourses?: StoredRelatedCourses;
   umabashiraChunks?: number;
   raceInputChunks?: number;
   pastRunsChunks?: number;
   courseRecordsChunks?: number;
+  runnerStatsChunks?: number;
 }
 
-type ChunkPart = "u" | "r" | "p" | "c";
+type ChunkPart = "u" | "r" | "p" | "c" | "s";
 
 export async function savePredictInput(
   kv: KvStore,
@@ -78,6 +83,8 @@ export async function savePredictInput(
     pastRuns?: string;
     /** 一次予想に渡したコース成績。プロンプト文は入れない。 */
     courseRecords?: string;
+    /** 一次予想に渡した父・母の父・騎手のコース成績。プロンプト文は入れない。 */
+    runnerStats?: string;
     relatedCourses?: StoredRelatedCourses;
   },
 ): Promise<{ truncated: boolean; umabashiraBytes: number; raceInputBytes: number }> {
@@ -85,7 +92,9 @@ export async function savePredictInput(
   const raceInput = clip(input.raceInput);
   const pastRuns = input.pastRuns == null ? null : clip(input.pastRuns);
   const courseRecords = input.courseRecords == null ? null : clip(input.courseRecords);
-  const truncated = umabashira.truncated || raceInput.truncated || Boolean(pastRuns?.truncated) || Boolean(courseRecords?.truncated);
+  const runnerStats = input.runnerStats == null ? null : clip(input.runnerStats);
+  const truncated =
+    umabashira.truncated || raceInput.truncated || Boolean(pastRuns?.truncated) || Boolean(courseRecords?.truncated) || Boolean(runnerStats?.truncated);
   const horses = input.horses;
   const relatedCourses = isStoredRelatedCourses(input.relatedCourses) ? input.relatedCourses : undefined;
   await deleteChunks(kv, input.raceKey);
@@ -107,17 +116,20 @@ export async function savePredictInput(
   };
   if (pastRuns) inlinePayload.pastRuns = pastRuns.text;
   if (courseRecords) inlinePayload.courseRecords = courseRecords.text;
+  if (runnerStats) inlinePayload.runnerStats = runnerStats.text;
   if (relatedCourses) inlinePayload.relatedCourses = relatedCourses;
   if (JSON.stringify(inlinePayload).length <= PREDICT_INPUT_CHUNK_CHARS) {
     meta.umabashira = umabashira.text;
     meta.raceInput = raceInput.text;
     if (pastRuns) meta.pastRuns = pastRuns.text;
     if (courseRecords) meta.courseRecords = courseRecords.text;
+    if (runnerStats) meta.runnerStats = runnerStats.text;
   } else {
     await putChunks(kv, input.raceKey, meta, "u", "umabashiraChunks", umabashira.text);
     await putChunks(kv, input.raceKey, meta, "r", "raceInputChunks", raceInput.text);
     if (pastRuns) await putChunks(kv, input.raceKey, meta, "p", "pastRunsChunks", pastRuns.text);
     if (courseRecords) await putChunks(kv, input.raceKey, meta, "c", "courseRecordsChunks", courseRecords.text);
+    if (runnerStats) await putChunks(kv, input.raceKey, meta, "s", "runnerStatsChunks", runnerStats.text);
   }
   await kv.put(keys.predictInput(input.raceKey), JSON.stringify(meta));
   return { truncated, umabashiraBytes: meta.umabashiraBytes, raceInputBytes: meta.raceInputBytes };
@@ -130,8 +142,10 @@ export async function loadPredictInput(kv: KvStore, raceKey: string): Promise<Pr
   const raceInput = await readText(kv, raceKey, "r", meta.raceInput, meta.raceInputChunks);
   const pastRuns = await readText(kv, raceKey, "p", meta.pastRuns, meta.pastRunsChunks);
   const courseRecords = await readText(kv, raceKey, "c", meta.courseRecords, meta.courseRecordsChunks);
+  const runnerStats = await readText(kv, raceKey, "s", meta.runnerStats, meta.runnerStatsChunks);
   const pastRunsState = sectionState(meta.pastRuns, meta.pastRunsChunks, pastRuns.incomplete);
   const courseRecordsState = sectionState(meta.courseRecords, meta.courseRecordsChunks, courseRecords.incomplete);
+  const runnerStatsState = sectionState(meta.runnerStats, meta.runnerStatsChunks, runnerStats.incomplete);
   const savedAt = typeof meta.savedAt === "string" && meta.savedAt.trim() !== "" ? meta.savedAt.trim() : null;
   return {
     raceKey,
@@ -140,14 +154,16 @@ export async function loadPredictInput(kv: KvStore, raceKey: string): Promise<Pr
     raceInput: raceInput.text,
     horses: Array.isArray(meta.horses) ? meta.horses : [],
     truncated: Boolean(meta.truncated),
-    incomplete: umabashira.incomplete || raceInput.incomplete || pastRuns.incomplete || courseRecords.incomplete,
+    incomplete: umabashira.incomplete || raceInput.incomplete || pastRuns.incomplete || courseRecords.incomplete || runnerStats.incomplete,
     raceInputIncomplete: raceInput.incomplete,
     savedAt,
     pastRuns: pastRunsState === "stored" ? pastRuns.text : null,
     courseRecords: courseRecordsState === "stored" ? courseRecords.text : null,
+    runnerStats: runnerStatsState === "stored" ? runnerStats.text : null,
     relatedCourses: isStoredRelatedCourses(meta.relatedCourses) ? meta.relatedCourses : null,
     pastRunsState,
     courseRecordsState,
+    runnerStatsState,
   };
 }
 
@@ -170,7 +186,7 @@ async function putChunks(
   raceKey: string,
   meta: StoredMeta,
   part: ChunkPart,
-  countKey: "umabashiraChunks" | "raceInputChunks" | "pastRunsChunks" | "courseRecordsChunks",
+  countKey: "umabashiraChunks" | "raceInputChunks" | "pastRunsChunks" | "courseRecordsChunks" | "runnerStatsChunks",
   text: string,
 ): Promise<void> {
   const parts = chunksOf(text);
@@ -229,6 +245,7 @@ async function deleteChunks(kv: KvStore, raceKey: string): Promise<void> {
     ["r", previous?.raceInputChunks ?? 0],
     ["p", previous?.pastRunsChunks ?? 0],
     ["c", previous?.courseRecordsChunks ?? 0],
+    ["s", previous?.runnerStatsChunks ?? 0],
   ];
   for (const [part, count] of counts) {
     for (let index = 0; index < count; index += 1) {

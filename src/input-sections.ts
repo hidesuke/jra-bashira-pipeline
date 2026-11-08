@@ -17,16 +17,26 @@ import {
   pastRunRuleLine,
 } from "./past-runs";
 import { courseSpecFromText, RELATED_COURSES_MAX, type CourseSpec } from "./related-courses";
+import {
+  RUNNER_STATS_EMPTY_LINE,
+  RUNNER_STATS_HEADING,
+  RUNNER_STATS_LOW_SAMPLE,
+  RUNNER_STATS_RATE_LINE,
+} from "./runner-stats";
 
 const SHAPE_PAST = "保存済みの近10走の形が一致しないため返しません";
 const SHAPE_COURSE = "保存済みのコース成績の形が一致しないため返しません";
+const SHAPE_RUNNER = "保存済みの出走馬のコース成績の形が一致しないため返しません";
 const MISSING_PAST = "保存済みの入力に「# 過去走（近10走）」がありません";
 const MISSING_COURSE = "保存済みの入力に「# コース成績」がありません";
+const MISSING_RUNNER = `保存済みの入力に「${RUNNER_STATS_HEADING}」がありません`;
 const NO_INPUT = "予想入力が保存されていません";
 const PAST_CHUNKS = "近10走の分割を最後まで読めませんでした";
 const COURSE_CHUNKS = "コース成績の分割を最後まで読めませんでした";
+const RUNNER_CHUNKS = "出走馬のコース成績の分割を最後まで読めませんでした";
 const RACE_CHUNKS_PAST = "ユーザー文の分割が欠けているため、近10走を取り出せません";
 const RACE_CHUNKS_COURSE = "ユーザー文の分割が欠けているため、コース成績を取り出せません";
+const RACE_CHUNKS_RUNNER = "ユーザー文の分割が欠けているため、出走馬のコース成績を取り出せません";
 const RELATED_MISSING = "関連コースの一覧は保存済みの入力にありません";
 const RELATED_UNREADABLE = "関連コースの一覧は読めないまま保存されていて、行の中身は残っていません";
 const RELATED_LINE = "保存済みのコース成績から関連コースの行を読めません";
@@ -73,6 +83,13 @@ export function extractCourseRecords(input: string): { text: string; header: Rel
   return { text: parsed.text, header: parsed.extra };
 }
 
+/** ユーザー文から、出走馬のコース成績の節だけを切り出す。形が崩れていたら本文は返さない。 */
+export function extractRunnerStats(input: string): { text: string } | { reason: string } {
+  const parsed = bestSection(splitLines(input), RUNNER_STATS_HEADING, parseRunnerAt, MISSING_RUNNER);
+  if ("reason" in parsed) return parsed;
+  return { text: parsed.text };
+}
+
 /** include=past_runs のときだけ応答へ足す欄。馬柱とユーザー文は含めない。 */
 export function pastRunsSnapshotFields(stored: PredictInputRecord | null): Record<string, unknown> {
   if (!stored) {
@@ -81,29 +98,36 @@ export function pastRunsSnapshotFields(stored: PredictInputRecord | null): Recor
       saved_at: null,
       past_runs: null,
       course_records: null,
+      runner_stats: null,
       related_courses: null,
       past_runs_source: null,
       course_records_source: null,
+      runner_stats_source: null,
       related_courses_source: null,
       past_runs_error: NO_INPUT,
       course_records_error: NO_INPUT,
+      runner_stats_error: NO_INPUT,
       related_courses_error: NO_INPUT,
     };
   }
   const past = resolvePast(stored);
   const course = resolveCourse(stored);
+  const runner = resolveRunner(stored);
   const related = resolveRelated(stored, course.header, course.error);
   return {
     input_run_id: stored.runId,
     saved_at: stored.savedAt,
     past_runs: past.text,
     course_records: course.text,
+    runner_stats: runner.text,
     related_courses: related.view,
     past_runs_source: past.source,
     course_records_source: course.source,
+    runner_stats_source: runner.source,
     related_courses_source: related.source,
     past_runs_error: past.error,
     course_records_error: course.error,
+    runner_stats_error: runner.error,
     related_courses_error: related.error,
   };
 }
@@ -137,6 +161,15 @@ function resolveCourse(stored: PredictInputRecord): {
   const extracted = extractCourseRecords(stored.raceInput);
   if ("reason" in extracted) return { text: null, source: null, error: extracted.reason, header: null };
   return { text: extracted.text, source: "extracted", error: null, header: extracted.header };
+}
+
+function resolveRunner(stored: PredictInputRecord): { text: string | null; source: "stored" | "extracted" | null; error: string | null } {
+  if (stored.runnerStatsState === "stored") return { text: stored.runnerStats, source: "stored", error: null };
+  if (stored.runnerStatsState === "incomplete") return { text: null, source: null, error: RUNNER_CHUNKS };
+  if (stored.raceInputIncomplete) return { text: null, source: null, error: RACE_CHUNKS_RUNNER };
+  const extracted = extractRunnerStats(stored.raceInput);
+  if ("reason" in extracted) return { text: null, source: null, error: extracted.reason };
+  return { text: extracted.text, source: "extracted", error: null };
 }
 
 function resolveRelated(
@@ -208,6 +241,76 @@ function parsePastAt(lines: string[], start: number): ParsedSection<undefined> |
   if ("reason" in body) return body;
   kept.push(...body.lines);
   return { text: kept.join("\n"), horses: body.horses, extra: undefined };
+}
+
+const RUNNER_COUNT_DETAIL = new RegExp(
+  `^出走 \\d+　勝ち \\d+　勝率 (?:\\d+\\.\\d%|—)　複勝 \\d+　複勝率 (?:\\d+\\.\\d%|—)(?: ${RUNNER_STATS_LOW_SAMPLE})?$`,
+);
+
+function parseRunnerAt(lines: string[], start: number): ParsedSection<undefined> | { reason: string } {
+  if (lines[start] !== RUNNER_STATS_HEADING) return { reason: SHAPE_RUNNER };
+  const second = lines[start + 1];
+  if (second == null || forbidden(second)) return { reason: SHAPE_RUNNER };
+  if (second === RUNNER_STATS_EMPTY_LINE || isRunnerFailureLine(second)) {
+    return { text: `${RUNNER_STATS_HEADING}\n${second}`, horses: 0, extra: undefined };
+  }
+  if (!/^条件: \S+ (芝|ダート|障害) \d+m$/.test(second)) return { reason: SHAPE_RUNNER };
+  const period = lines[start + 2];
+  if (period == null || !/^期間: \d{4}-\d{2}-\d{2}〜\d{4}-\d{2}-\d{2}（レース日の前日までの過去\d+年）$/.test(period)) {
+    return { reason: SHAPE_RUNNER };
+  }
+  const kept = [lines[start]!, second, period];
+  let index = start + 3;
+  const through = lines[index];
+  if (through != null && /^確定済みデータは \d{4}-\d{2}-\d{2} まで。$/.test(through)) {
+    kept.push(through);
+    index += 1;
+  }
+  const scope = lines[index];
+  const rate = lines[index + 1];
+  if (scope == null || rate == null || !isScopeLine(scope) || rate !== RUNNER_STATS_RATE_LINE) return { reason: SHAPE_RUNNER };
+  kept.push(scope, rate);
+  const body = consumeHorses(lines, index + 2, SHAPE_RUNNER, parseRunnerHorse);
+  if ("reason" in body) return body;
+  kept.push(...body.lines);
+  return { text: kept.join("\n"), horses: body.horses, extra: undefined };
+}
+
+function parseRunnerHorse(lines: string[], headingIndex: number): { lines: string[]; nextIndex: number } | { reason: string } {
+  const heading = lines[headingIndex];
+  if (heading == null || !isHorseHeading(heading)) return { reason: SHAPE_RUNNER };
+  const sire = lines[headingIndex + 1];
+  const broodmare = lines[headingIndex + 2];
+  const jockey = lines[headingIndex + 3];
+  if (sire == null || broodmare == null || jockey == null) return { reason: SHAPE_RUNNER };
+  if (!isRunnerStatLine("父", sire) || !isRunnerStatLine("母父", broodmare) || !isRunnerStatLine("騎手", jockey)) {
+    return { reason: SHAPE_RUNNER };
+  }
+  return { lines: [heading, sire, broodmare, jockey], nextIndex: headingIndex + 4 };
+}
+
+function isRunnerStatLine(label: "父" | "母父" | "騎手", line: string): boolean {
+  if (forbidden(line)) return false;
+  if (line === `${label}: 出馬表に無い`) return true;
+  const prefix = `${label} `;
+  if (!line.startsWith(prefix)) return false;
+  const body = line.slice(prefix.length);
+  const splitAt = body.indexOf(": ");
+  if (splitAt <= 0) return false;
+  const detail = body.slice(splitAt + 2);
+  if (detail === "名前が見つからない" || detail === "同名のため特定できない" || detail === "生年付きで指定し直しても特定できない") {
+    return true;
+  }
+  if (/^取得できず（[^）]+）$/.test(detail)) return true;
+  return RUNNER_COUNT_DETAIL.test(detail);
+}
+
+function isRunnerFailureLine(line: string): boolean {
+  return line.startsWith("取得できませんでした（") && line.endsWith("）。") && !forbidden(line) && line.length <= 300;
+}
+
+function isScopeLine(line: string): boolean {
+  return line.startsWith("scope: ") && !forbidden(line) && line.length <= 240;
 }
 
 function parseCourseAt(lines: string[], start: number): ParsedSection<RelatedHeader> | { reason: string } {
