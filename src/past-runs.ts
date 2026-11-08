@@ -39,6 +39,7 @@ const CAREER_COLUMNS = [
   "rail_type",
   "track_condition",
   "race_condition",
+  "race_type",
   "grade",
   "race_name_main",
   "official_result",
@@ -123,6 +124,36 @@ export function pastRunRuleLine(): string {
 }
 
 export const PAST_RUN_COLUMN_COUNT = PAST_RUN_HEADER.length;
+
+/** スキーマの競走種別。スペースは項目内の区切りで、JRA の競走名には入らない。 */
+const RACE_TYPE_LABEL: Record<string, string> = {
+  "2歳": "2歳",
+  "3歳": "3歳",
+  "3歳以上": "3歳以上",
+  "4歳以上": "4歳以上",
+  "障害 3歳以上": "障害3歳以上",
+  "障害 4歳以上": "障害4歳以上",
+  "アラ系 2歳": "アラ系2歳",
+  "アラ系 3歳": "アラ系3歳",
+  "アラ系 3歳以上": "アラ系3歳以上",
+  "アラ系 4歳以上": "アラ系4歳以上",
+};
+
+/**
+ * レース名。特別競走は race_name_main。
+ * それが空のときは、競走種別とクラスが両方あるときだけつなぐ（3歳以上1勝クラス、2歳未勝利、障害3歳以上未勝利）。
+ * どちらかが無い、または種別がこの一覧に無いときは空欄。クラスの言い換えはしない。
+ */
+export function pastRunRaceName(row: Record<string, unknown>): string {
+  const main = stringField(row, "race_name_main");
+  if (main) return main;
+  const type = stringField(row, "race_type");
+  const condition = stringField(row, "race_condition");
+  if (!type || !condition) return "";
+  const label = RACE_TYPE_LABEL[type];
+  if (!label) return "";
+  return `${label}${condition}`;
+}
 
 /** コース成績の先頭に書く関連コースの行。null は一覧が読めない。 */
 export function renderRelatedCoursesLine(related: CourseSpec[] | null): string {
@@ -447,7 +478,7 @@ function pastRunRow(row: Record<string, unknown>, paces: Map<string, RacePace>):
   const cells = [
     meetingDay(rawDate) ?? rawDate ?? "",
     stringField(row, "race_track") ?? "",
-    stringField(row, "race_name_main") ?? "",
+    pastRunRaceName(row),
     stringField(row, "grade") ?? "",
     stringField(row, "race_condition") ?? "",
     stringField(row, "surface") ?? "",

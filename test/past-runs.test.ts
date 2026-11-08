@@ -10,6 +10,7 @@ import {
   loadPastPerformance,
   planCareerBatches,
   planPaceQueries,
+  pastRunRaceName,
   raceIdOf,
   renderCourseRecords,
   renderPastRuns,
@@ -226,6 +227,59 @@ describe("past runs table", () => {
       ["2026-10-12T00:00:00Z", 5],
     ]);
     expect(countPlaces([current, dated], race, () => true)).toEqual({ first: 0, second: 1, third: 0, fourth: 0, fifth: 0, other: 0 });
+  });
+
+  it("builds a condition race name from race type and class, and leaves it blank when either is missing", () => {
+    const named = run({ date: "2026-10-12", track: "東京", number: 5, surface: "芝", distance: 1600, place: 2 });
+    named.race_name_main = "前走";
+    named.race_type = "3歳";
+    named.race_condition = "1勝クラス";
+    const winClass = run({ date: "2026-09-01", track: "東京", number: 3, surface: "芝", distance: 1600, place: 4 });
+    winClass.race_type = "3歳";
+    winClass.race_condition = "1勝クラス";
+    const older = run({ date: "2026-08-01", track: "阪神", number: 2, surface: "芝", distance: 1800, place: 5 });
+    older.race_type = "3歳以上";
+    older.race_condition = "2勝クラス";
+    const maiden = run({ date: "2026-07-01", track: "中山", number: 1, surface: "芝", distance: 1600, place: 1 });
+    maiden.race_type = "2歳";
+    maiden.race_condition = "未勝利";
+    const debut = run({ date: "2026-06-01", track: "札幌", number: 4, surface: "芝", distance: 1800, place: 3 });
+    debut.race_type = "2歳";
+    debut.race_condition = "新馬";
+    const jump = run({ date: "2026-05-01", track: "中京", number: 1, surface: "障害", distance: 3000, place: 6 });
+    jump.race_type = "障害 3歳以上";
+    jump.race_condition = "未勝利";
+    const oldMoney = run({ date: "2026-04-01", track: "東京", number: 6, surface: "ダート", distance: 1600, place: 7 });
+    oldMoney.race_type = "4歳以上";
+    oldMoney.race_condition = "500万円以下";
+    const noType = run({ date: "2026-03-01", track: "東京", number: 7, surface: "芝", distance: 1600, place: 8 });
+    noType.race_condition = "未勝利";
+    const noClass = run({ date: "2026-02-01", track: "東京", number: 8, surface: "芝", distance: 1600, place: 9 });
+    noClass.race_type = "3歳";
+    const unknown = run({ date: "2026-01-01", track: "東京", number: 9, surface: "芝", distance: 1600, place: 10 });
+    unknown.race_type = "年齢不明";
+    unknown.race_condition = "未勝利";
+    expect(pastRunRaceName(named)).toBe("前走");
+    expect(pastRunRaceName(winClass)).toBe("3歳1勝クラス");
+    expect(pastRunRaceName(older)).toBe("3歳以上2勝クラス");
+    expect(pastRunRaceName(maiden)).toBe("2歳未勝利");
+    expect(pastRunRaceName(debut)).toBe("2歳新馬");
+    expect(pastRunRaceName(jump)).toBe("障害3歳以上未勝利");
+    expect(pastRunRaceName(oldMoney)).toBe("4歳以上500万円以下");
+    expect(pastRunRaceName(oldMoney)).not.toBe("4歳以上1勝クラス");
+    expect(pastRunRaceName(noType)).toBe("");
+    expect(pastRunRaceName(noClass)).toBe("");
+    expect(pastRunRaceName(unknown)).toBe("");
+    const text = renderPastRuns({
+      race,
+      horses: [horse],
+      rows: [named, winClass, noType],
+      paces: new Map(),
+    });
+    expect(text).toContain("| 前走 |");
+    expect(text).toContain("| 3歳1勝クラス |");
+    expect(text).toContain("| 2026-03-01 | 東京 |  |");
+    expect(text).not.toContain("年齢不明");
   });
 
   it("plans one get_entries until the row budget, then another, and chunks pace ids by 100", () => {

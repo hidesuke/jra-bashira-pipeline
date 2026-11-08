@@ -70,6 +70,7 @@ const ENTRY_FIELDS = [
   "track_condition",
   "weather",
   "race_condition",
+  "race_type",
   "grade",
   "race_name_main",
   "official_result",

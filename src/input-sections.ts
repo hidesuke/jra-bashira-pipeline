@@ -93,7 +93,7 @@ export function extractRunnerStats(input: string): { text: string } | { reason: 
 
 /** 空欄の意味。0 や未出走とは別。本文には足さない。 */
 export const PAST_RUNS_MISSING_NOTE =
-  "空欄は値なしであり、0や未出走ではない。0と書いてあるセルだけがゼロである。レース名の空欄も同じで、走が無いという意味ではない。";
+  "空欄は値なしであり、0や未出走ではない。0と書いてあるセルだけがゼロである。レース名の空欄は、競走名が無く、年齢条件とクラスも揃わないため名前を作れなかった走であり、未出走ではない。";
 
 export interface PastRunsMissing {
   /** 表のデータ行数。見出しと区切り行は数えない。 */
