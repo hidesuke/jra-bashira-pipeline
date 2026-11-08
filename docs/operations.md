@@ -30,7 +30,7 @@ Worker がまだ無い状態では `wrangler secret put` もダッシュボー�
 
 ## ビルドと `/health` の commit
 
-`/health` は `ok`、`mode`（`one-race`）、`commit`、`version_id` を返します。`commit` は、空でなければ `CF_VERSION_METADATA.tag` です。Workers Builds ではこの tag が空になることがあります。そのときはビルド時に `src/build-info.ts` へ書いた SHA を使います。両方空なら `commit` は null です。
+`/health` は `ok`、`mode`（`next-day-batch`）、`version`（`package.json` の version。コードでは `APP_VERSION`）、`commit`、`version_id` を返します。`commit` は、空でなければ `CF_VERSION_METADATA.tag` です。Workers Builds ではこの tag が空になることがあります。そのときはビルド時に `src/build-info.ts` へ書いた SHA を使います。両方空なら `commit` は null です。
 
 SHA を書くのは `scripts/write-build-info.mjs` です。次のときだけファイルを書き換えます。
 
@@ -84,4 +84,6 @@ BASHIRA、Gemini、Notion はモックです。実 API へのデプロイや書�
 
 ## cron
 
-時刻は未定です。`triggers` はコメントアウトしたままで、有効にしてもレースは積みません。[pipeline.md](pipeline.md) を参照してください。
+金曜と土曜の 16:45（日本時間）に、翌日の全レースを積みます。`wrangler.jsonc` の式は `45 7 * * FRI,SAT` です。Cloudflare の cron は UTC で、曜日の 1 は日曜なので金・土は `FRI,SAT` です。7:45 UTC は 16:45 JST で、日付は変わりません。積む開催日は、発火した瞬間の日本時間の翌日です。
+
+`scheduled` は予想の完了を待ちません。0 件の日はログして戻ります。処理中と完了済みのレースは積みません。失敗済みはもう一度積みます。件数はログと KV `batch:v1:{開催日}` の 1 件に残します。プレビューには cron を置いていないので、プレビューの `scheduled` は動きません。進み方とロックは [pipeline.md](pipeline.md)、手動の再実行は [admin.md](admin.md) です。

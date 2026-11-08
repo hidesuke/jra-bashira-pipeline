@@ -20,6 +20,7 @@ import {
   decideNotionTarget,
   notionFetch,
   notionProperties,
+  notionRaceFilter,
   pageMatchesRace,
   type NotionSchema,
 } from "./notion";
@@ -168,10 +169,15 @@ export async function handleJobMessage(
     await dispatch(message, bound);
     return "ack";
   } catch (err) {
+    if (err instanceof JobNotVisible) {
+      bound.log?.("job_not_visible", { raceKey: raceKeyOf(message), kind: message.kind });
+      return "retry";
+    }
     if (await continueNotionLater(message, bound, err)) return "ack";
     const retry = isRetryable(err) && !isFinalAttempt(delivery);
     const recorded = await persistFailure(message, bound, err, retry, delivery);
-    if (!retry && recorded.saved) await releaseLock(bound.kv, raceKeyOf(message));
+    if (recorded.yielded) return "ack";
+    if (!retry && recorded.saved) await releaseLock(bound.kv, raceKeyOf(message), runIdOf(message));
     bound.log?.("job_failed", {
       raceKey: raceKeyOf(message),
       retryable: retry,
@@ -232,23 +238,53 @@ function isFinalAttempt(delivery: Delivery | undefined): boolean {
   return delivery.attempt >= delivery.maxRetries;
 }
 
+/** ジョブの書き込みが別の isolate からまだ見えない。KV は書かず、Queue に再配送させる。 */
+class JobNotVisible extends JobError {
+  constructor() {
+    super("ジョブをまだ読めません。再配送で続けます", true);
+    this.name = "JobNotVisible";
+  }
+}
+
+const PHASE_RANK: Record<string, number> = {
+  collect: 0,
+  form: 1,
+  stats: 2,
+  predict: 3,
+  notion: 4,
+};
+
 async function dispatch(message: JobMessage, deps: PipelineDeps): Promise<void> {
   if (message.kind === "start") {
-    const existing = await loadJob(deps.kv, message.race.raceKey);
-    if (existing?.runId === message.runId && (existing.phase === "error" || existing.phase === "done")) return;
-    if (existing?.runId === message.runId && existing.phase !== "collect") {
-      await enqueuePhase(existing, deps);
-      return;
-    }
-    await collect(message, deps);
+    await dispatchStart(message, deps);
     return;
   }
   const state = await loadJob(deps.kv, message.raceKey);
-  if (!state || state.runId !== message.runId || state.phase === "done" || state.phase === "error") return;
+  if (!state) throw new JobNotVisible();
+  if (state.runId !== message.runId || state.phase === "done" || state.phase === "error") return;
+  const actual = PHASE_RANK[state.phase];
+  const expected = PHASE_RANK[message.kind];
+  if (actual == null || expected == null) return;
+  if (actual > expected) return;
+  if (actual < expected) throw new JobNotVisible();
   if (message.kind === "form") await runForm(state, deps);
   if (message.kind === "stats") await runStats(state, deps);
   if (message.kind === "predict") await runPredict(state, deps);
   if (message.kind === "notion") await runNotion(state, deps);
+}
+
+async function dispatchStart(message: Extract<JobMessage, { kind: "start" }>, deps: PipelineDeps): Promise<void> {
+  if (!(await startStillOwns(message, deps))) {
+    deps.log?.("start_skipped", { raceKey: message.race.raceKey, runId: message.runId });
+    return;
+  }
+  const existing = await loadJob(deps.kv, message.race.raceKey);
+  if (existing?.runId === message.runId && (existing.phase === "error" || existing.phase === "done")) return;
+  if (existing?.runId === message.runId && existing.phase !== "collect") {
+    await enqueuePhase(existing, deps);
+    return;
+  }
+  await collect(message, deps);
 }
 
 async function collect(message: Extract<JobMessage, { kind: "start" }>, deps: PipelineDeps): Promise<void> {
@@ -361,6 +397,10 @@ async function collect(message: Extract<JobMessage, { kind: "start" }>, deps: Pi
     notionPageId: null,
     updatedAt: deps.now().toISOString(),
   };
+  if (!(await startStillOwns(message, deps))) {
+    deps.log?.("start_yielded", { raceKey: message.race.raceKey, runId: message.runId });
+    return;
+  }
   await commitJob(deps, state);
   await enqueuePhase(state, deps);
 }
@@ -918,7 +958,7 @@ async function finishNotion(state: JobState, deps: PipelineDeps): Promise<void> 
   state.notionArchivePageId = null;
   state.updatedAt = deps.now().toISOString();
   await commitJob(deps, state);
-  await releaseLock(deps.kv, state.race.raceKey);
+  await releaseLock(deps.kv, state.race.raceKey, state.runId);
 }
 
 function ensureNotionRoom(budget: ExternalBudget): void {
@@ -945,13 +985,7 @@ async function searchRacePages(
       method: "POST",
       body: JSON.stringify({
         page_size: 20,
-        filter: {
-          and: [
-            { property: "日付", date: { equals: race.date } },
-            { property: "競馬場", select: { equals: race.venue } },
-            { property: "レース", select: { equals: String(race.raceNumber) } },
-          ],
-        },
+        filter: notionRaceFilter(race),
       }),
     },
     fetcher,
@@ -1088,6 +1122,8 @@ interface FailureRecord {
   /** phase=error を書いた。このときだけ通知する。 */
   finalized: boolean;
   phaseAtFailure: string | null;
+  /** 別の実行がロックを持っている。この配送はジョブもロックも触らない。 */
+  yielded?: boolean;
 }
 
 function phaseBudget(deps: PipelineDeps): ExternalBudget {
@@ -1118,6 +1154,12 @@ async function persistFailure(
   const missed: FailureRecord = { saved: false, finalized: false, phaseAtFailure: null };
   try {
     const raceKey = raceKeyOf(message);
+    if (message.kind === "start") {
+      const owner = await freshLockOwner(deps.kv, raceKey, deps.now());
+      if (owner && owner !== message.runId) {
+        return { saved: true, finalized: false, phaseAtFailure: null, yielded: true };
+      }
+    }
     const state = await loadJob(deps.kv, raceKey);
     const updatedAt = deps.now().toISOString();
     if (!state || (message.kind === "start" && state.runId !== message.runId)) {
@@ -1169,8 +1211,46 @@ async function persistFailure(
   }
 }
 
-async function releaseLock(kv: KvStore, raceKey: string): Promise<void> {
+async function releaseLock(kv: KvStore, raceKey: string, runId: string): Promise<void> {
+  const lock = readLock(await kv.get(keys.lock(raceKey)));
+  if (lock && lock.runId !== runId) return;
   await kv.delete(keys.lock(raceKey));
+}
+
+/** 自分が取ったロックだけ外す。別の実行のロックは残す。 */
+export async function releaseLockOwned(kv: KvStore, raceKey: string, runId: string): Promise<void> {
+  await releaseLock(kv, raceKey, runId);
+}
+
+function readLock(raw: string | null): { runId: string; expiresAt: number } | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { runId?: unknown; expiresAt?: unknown };
+    if (typeof parsed.runId !== "string" || typeof parsed.expiresAt !== "number") return null;
+    return { runId: parsed.runId, expiresAt: parsed.expiresAt };
+  } catch {
+    return null;
+  }
+}
+
+/** 期限内のロックを持っている runId。期限切れと、ロックが無いときは null。 */
+export async function freshLockOwner(kv: KvStore, raceKey: string, now: Date): Promise<string | null> {
+  const lock = readLock(await kv.get(keys.lock(raceKey)));
+  if (!lock || lock.expiresAt <= now.getTime()) return null;
+  return lock.runId;
+}
+
+/**
+ * start を続けてよいか。
+ * 別の runId の期限内ロック、または更新の新しい別ジョブがあるときは譲る。
+ * ロックが切れていてジョブも無ければ、待っていたメッセージを進め、二重投入で消さない。
+ */
+async function startStillOwns(message: Extract<JobMessage, { kind: "start" }>, deps: PipelineDeps): Promise<boolean> {
+  const owner = await freshLockOwner(deps.kv, message.race.raceKey, deps.now());
+  if (owner && owner !== message.runId) return false;
+  const existing = await loadJob(deps.kv, message.race.raceKey);
+  if (existing && existing.runId !== message.runId && blocksNewRun(existing, deps.now().getTime())) return false;
+  return true;
 }
 
 /** ロックが残っていても、終了済み・失敗済み・更新が止まったジョブは進行中にしない。 */
@@ -1193,23 +1273,20 @@ export async function acquireLock(
   requestedBy: string,
   now: Date,
 ): Promise<boolean> {
-  const current = await kv.get(keys.lock(raceKey));
-  if (current) {
-    let expiresAt = 0;
-    try {
-      expiresAt = (JSON.parse(current) as { expiresAt?: number }).expiresAt ?? 0;
-    } catch {
-      expiresAt = 0;
-    }
-    const lockFresh = expiresAt > now.getTime();
-    if (lockFresh && blocksNewRun(await loadJob(kv, raceKey), now.getTime())) return false;
-  }
+  const nowMs = now.getTime();
+  const job = await loadJob(kv, raceKey);
+  if (job && blocksNewRun(job, nowMs)) return false;
+  const current = readLock(await kv.get(keys.lock(raceKey)));
+  // 期限内のロックが、いまのジョブと別の runId なら、start はまだ Queue にいる。
+  // 失敗済みのジョブのまま再配送すると、ここを見ないと二重に積む。
+  if (current && current.expiresAt > nowMs && (!job || current.runId !== job.runId)) return false;
   await kv.put(
     keys.lock(raceKey),
-    JSON.stringify({ runId, requestedBy, expiresAt: now.getTime() + LOCK_TTL_SECONDS * 1000 }),
+    JSON.stringify({ runId, requestedBy, expiresAt: nowMs + LOCK_TTL_SECONDS * 1000 }),
     { expirationTtl: LOCK_TTL_SECONDS },
   );
-  return true;
+  const seen = readLock(await kv.get(keys.lock(raceKey)));
+  return seen?.runId === runId;
 }
 
 function raceKeyOf(message: JobMessage): string {

@@ -2,6 +2,24 @@
 
 どれも Access の JWT が必要です。呼び出し元の見分けは [access.md](access.md) です。例の Client Secret はシェル変数に置き、リポジトリには書きません。
 
+## 開催日の一括投入
+
+`POST /admin/batch` は、指定した開催日のレースを cron と同じ手順で積みます。
+
+```bash
+curl -sS -X POST "https://<worker>/admin/batch" \
+  -H "CF-Access-Client-Id: $GROK_ACCESS_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET" \
+  -H "content-type: application/json" \
+  -d '{"date":"2026-11-09","dry_run":true}'
+```
+
+`date` は `YYYY-MM-DD` で必須です。`dry_run` が `true` のときは列挙するだけで、Queue にもロックにも KV の要約にも書きません。省略か `false` のときは積みます。中止（`canceled`）と、処理中・完了済みは `skipped` です。失敗済みはもう一度積みます。
+
+応答の件数は `enqueued`、`would_enqueue`、`skipped`、`failed` です。レースごとの `action` は `enqueued`、`would_enqueue`、`skipped`、`failed` です。`dry_run` でないときだけ、同じ内容を KV `batch:v1:{date}` に 1 件書きます。プロンプト本文は入れません。
+
+0 件の日は 200 で件数 0 です。`get_races` を開催場に分けてもまだ打ち切れているときは 400 で、その日は積みません。進め方は [pipeline.md](pipeline.md) です。
+
 ## ジョブ
 
 ```bash

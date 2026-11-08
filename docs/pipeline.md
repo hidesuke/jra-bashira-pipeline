@@ -74,7 +74,7 @@ predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回�
 | `max_batch_timeout` | 1 |
 | `max_retries` | 3（`src/types.ts` の `QUEUE_MAX_RETRIES` と同じ） |
 | `retry_delay` | 30 秒 |
-| `max_concurrency` | 1 |
+| `max_concurrency` | 3（`src/types.ts` の `QUEUE_MAX_CONCURRENCY` と同じ） |
 | `dead_letter_queue` | `jra-bashira-race-dlq` |
 
 待ち時間を置いているのは、同じジョブキーの KV 書き込みが 1 秒に 1 回という制限に当たらないようにするためです。ジョブの保存は、同じ配送の中では約 1.1 秒に 1 回まで間を空けます。
@@ -85,7 +85,7 @@ predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回�
 
 `phase` を `error` に書けたときだけ、任意の Webhook へ POST します。`NOTIFY_WEBHOOK_URL` が未設定なら送りません。本文は JSON で、`type` は `race_failed` です。入るのは `race_key`、`run_id`、失敗したときの `phase_at_failure`、短い `error`、`attempts`、分かれば `http_status`、`inspect_path`（`/admin/inspect?race_key=...`）、`jobs_path`（`/admin/jobs?race_key=...`）、`occurred_at_jst` です。キーは Secret `NOTIFY_WEBHOOK_KEY` です。ヘッダー名は平文の `NOTIFY_WEBHOOK_KEY_HEADER` で、未設定なら `Authorization: Bearer <key>` です。`Authorization` という名前は大文字小文字を問いません。別の名前ならキーをそのままそのヘッダーに入れます。`Content-Type` と `Content-Length` は使いません。URL とキーはログに出しません。失敗したときは HTTP ステータスだけをログし、約 10 秒で打ち切ります。この POST は同じ配送の外部予算に 1 件数えます。ソフト上限の 45 を使い切ったあとでも、プラットフォーム上限の 50 未満なら 1 件だけ送ります。通知の失敗でジョブを `error` 以外にしたり、Queue の再試行を足したりはしません。置き方は [operations.md](operations.md) です。
 
-複数レースを一度に積む入口は、いまありません。`POST /run` は 1 レース、cron はレースを積みません。Queue の `max_batch_size` は配送の件数で、レースの束ではありません。そのため `batch_completed` は送りません。後から複数レースを積むときは、積む時点で batch id を付け、終了と失敗の件数をその id でまとめてから 1 回送る必要があります。
+複数レースを一度に積む入口は、金曜・土曜の cron と `POST /admin/batch` です。どちらもレースごとに `start` を 1 件ずつ積み、`POST /run` と同じ関数を使います。`POST /run` 自体は 1 レースのままです。`max_batch_size` は配送の件数で、レースの束ではありません。`max_concurrency` が 3 なので、別レースのメッセージは 3 件まで同時に進みます。同じレースの次の段階は、前のメッセージが終わってから積みます。終了を 1 通にまとめる `batch_completed` は送りません。
 
 認可の失敗（未認可、`invalid_grant`、通信失敗を含む refresh 失敗）は再試行せず、ジョブを `error` にします。理由は `GET /admin/jobs` の `error` に出ます。このときも、上の Webhook を 1 回送ります。
 
@@ -93,9 +93,15 @@ predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回�
 
 受理されると 202 で `race_key`、`run_id`、`requested_by` が返ります。同じレースが処理中なら 409 です。
 
-ロックのキーは `lock:v1:{raceKey}` で、寿命は 15 分（`LOCK_TTL_SECONDS`）です。ロックが残っていても、ジョブの `phase` が `done` か `error` のとき、`error` が入っているとき、最後の更新から 15 分を超えているときは、新しい実行を拒みません。ジョブが無く、ロックの期限だけが残っているときは拒みます。
+ロックのキーは `lock:v1:{raceKey}` で、寿命は 4 時間（`LOCK_TTL_SECONDS`）です。3 並列で 36 レースを進めると、次のメッセージを待つあいだジョブの更新が止まります。`predict` が consumer の 15 分まで伸びると、その待ちは約 3 時間になります。15 分のままだと、待ちのあいだの再投入が進行中のジョブを上書きします。
 
-終了時と、再試行しない失敗を保存できたときは、ロックを消します。Queue へ積む前に失敗したときも消します。
+ロックキーが消えていても、ジョブが処理中で最後の更新から 4 時間以内なら、新しい実行は拒みます。`phase` が `done` か `error` のとき、`error` が入っているとき、更新が 4 時間を超えて止まっているときは拒みません。ただし期限内のロックが、そのジョブと別の `runId` を持っているときは、新しい `start` が Queue にいるので拒みます。ジョブが無く、ロックの期限だけが残っているときも拒みます。
+
+別の `runId` の `start` が配送されても、期限内のロックか処理中のジョブがあるときは collect しません。ジョブを書く直前にもう一度見ます。自分が外したのではないロックは消しません。
+
+`max_concurrency` が 3 だと、次の段階のメッセージが別の isolate で、KV のジョブより先に読まれることがあります。ジョブがまだ見えない、または段階が追いついていないときは、KV に書かず再配送します。すでに先の段階へ進んだメッセージは、その段階をやり直しません。Notion の検索は日付・競馬場・レース番号で絞ります。並走しても、別レースのページは候補になりません。同じレースの BASHIRA ページが複数なら、これまでどおり止めます。
+
+終了時と、再試行しない失敗を保存できたときは、その実行のロックだけを消します。Queue へ積む前に失敗したときも、その実行のロックだけを消します。
 
 ## Notion の続き
 
@@ -103,4 +109,8 @@ predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回�
 
 ## cron
 
-`wrangler.jsonc` の `triggers` はコメントアウトしています。コメント内の例は `0 21 * * *` です。有効にしても `scheduled` は理由をログして戻り、レースは積みません。時刻を決めたあとに、積む処理を別途足してください。
+金曜と土曜の 16:45（日本時間）に、翌日の開催を積みます。式は `45 7 * * FRI,SAT` です。時刻の決め方は [operations.md](operations.md) にあります。
+
+`scheduled` は `ctx.waitUntil` に、レースを列挙して積む処理を渡します。予想の完了は待ちません。BASHIRA の `get_races` に、その開催日の `race_meeting_date` を `gte` と `lte` で渡します。上限は 500 件です。続きを取る offset は無いので、`truncated` のときは 10 場に分けて取り直します。1 場でもまだ打ち切れていたら、その日は 1 件も積みません。中止（`race_status` が `canceled`）は積みません。0 件ならログして戻ります。
+
+処理中のジョブと、`phase` が `done` のジョブは飛ばします。`error` のジョブはもう一度積みます。積めた件数、飛ばした件数、失敗した件数はログと KV `batch:v1:{開催日}` に 1 件残します。レースごとのキーは増やしません。手動で同じことをする入口は [admin.md](admin.md) の `POST /admin/batch` です。

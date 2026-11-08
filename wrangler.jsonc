@@ -4,7 +4,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-07",
   "compatibility_flags": ["nodejs_compat"],
-  // 1レースの手動実行が前提なので、ログもトレースも全件残す。
+  // ログもトレースも全件残す。invocation はレースの段階ごと。
   // issues はダッシュボードの問題検出（Workers Issues）。
   "observability": {
     "enabled": true,
@@ -16,11 +16,12 @@
     "traces": { "enabled": true, "head_sampling_rate": 1 },
     "issues": { "enabled": true }
   },
-  // cron は時刻が決まるまで無効。有効化しても src/index.ts の scheduled は
-  // レースを積まずに戻る（開発モードは POST /run の 1 レースだけ）。
-  // "triggers": {
-  //   "crons": ["0 21 * * *"]
-  // },
+  // 金曜・土曜 16:45 JST。Cloudflare の cron は UTC で、曜日の 1 は日曜なので FRI,SAT。
+  // scheduled は翌日の全レースを積むだけ。予想は Queue が 3 並列で進める。
+  // previews には triggers を置かない。プレビューの scheduled は動かない。
+  "triggers": {
+    "crons": ["45 7 * * FRI,SAT"]
+  },
   "vars": {
     "BASHIRA_MCP_URL": "https://mcp.bashira.omninode.co.jp/mcp",
     "BABA_URL": "https://jra-dify-pipeline.hdsk.workers.dev/baba/latest",
@@ -56,7 +57,8 @@
         // このキューは deploy では作られない。先に次を実行する:
         // npx wrangler queues create jra-bashira-race-dlq
         "dead_letter_queue": "jra-bashira-race-dlq",
-        "max_concurrency": 1
+        // 同時に 3 メッセージ。別レースは並走する。同じレースの次段階は、前のメッセージが終わってから積む。
+        "max_concurrency": 3
       }
     ]
   },

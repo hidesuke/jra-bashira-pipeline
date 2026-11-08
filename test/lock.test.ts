@@ -139,6 +139,7 @@ describe("failed jobs release the race lock", () => {
     await env.kv.put(
       keys.job(raceKey),
       JSON.stringify({
+        runId: "old",
         phase: "collect",
         error: "MCP が Mcp-Session-Id を返しませんでした",
         updatedAt: env.now().toISOString(),
@@ -150,12 +151,60 @@ describe("failed jobs release the race lock", () => {
     await env.kv.put(
       keys.job(raceKey),
       JSON.stringify({
+        runId: "old",
         phase: "collect",
         updatedAt: new Date(env.now().getTime() - (LOCK_TTL_SECONDS + 1) * 1000).toISOString(),
       }),
     );
     expect(blocksNewRun({ phase: "collect", updatedAt: new Date(0).toISOString() }, env.now().getTime())).toBe(false);
     expect((await postRun(env.http)).status).toBe(202);
+  });
+
+  it("rejects a new run while the job is active even after the lock key is gone", async () => {
+    const env = setup("auth");
+    await env.kv.put(
+      keys.job(raceKey),
+      JSON.stringify({
+        phase: "predict",
+        updatedAt: env.now().toISOString(),
+        race: { raceKey },
+      }),
+    );
+    expect((await postRun(env.http)).status).toBe(409);
+    expect(env.messages).toHaveLength(0);
+  });
+
+  it("does not collect a start that lost the lock to another run", async () => {
+    const env = setup("auth");
+    await env.kv.put(
+      keys.lock(raceKey),
+      JSON.stringify({ runId: "winner", requestedBy: "cron", expiresAt: env.now().getTime() + 60_000 }),
+    );
+    const decision = await handleJobMessage(
+      {
+        kind: "start",
+        runId: "loser",
+        requestedBy: "cron",
+        race: {
+          raceKey,
+          raceId: raceKey,
+          date: "2026-11-08",
+          venue: "東京",
+          venueCode: "05",
+          raceNumber: 11,
+        },
+      },
+      {
+        kv: env.kv,
+        config: env.http.config,
+        bashira: env.bashira,
+        enqueue: env.http.enqueue,
+        now: env.now,
+      },
+    );
+    expect(decision).toBe("ack");
+    expect(await env.kv.get(keys.job(raceKey))).toBeNull();
+    expect(await env.kv.get(keys.lock(raceKey))).toContain("winner");
   });
 });
 

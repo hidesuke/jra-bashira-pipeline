@@ -2,7 +2,6 @@ import { generateKeyPair, SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
 import { identifyCaller, verifyAccessJwt } from "../src/access";
 import { ExternalBudget, budgetedFetch } from "../src/budget";
-import { cronSkipReason } from "../src/cron";
 import { decryptJson, encryptJson, importAesKey, safeEqual } from "../src/crypto-util";
 import {
   composeRemarks,
@@ -976,17 +975,13 @@ describe("access jwt", () => {
   });
 });
 
-describe("budget and cron", () => {
+describe("budget", () => {
   it("stops before the free-plan external subrequest cap", async () => {
     const budget = new ExternalBudget(2);
     const fetcher = async () => new Response("ok");
     await budgetedFetch(budget, "https://example.test/1", undefined, fetcher);
     await budgetedFetch(budget, "https://example.test/2", undefined, fetcher);
     await expect(budgetedFetch(budget, "https://example.test/3", undefined, fetcher)).rejects.toThrow(/50/);
-  });
-
-  it("does not enqueue races from cron", () => {
-    expect(cronSkipReason()).toContain("何も積まない");
   });
 });
 

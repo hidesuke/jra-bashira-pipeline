@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { APP_VERSION } from "../version";
 import { decryptJson, encryptJson, importAesKey, safeEqual } from "../crypto-util";
 import { DO_EXTERNAL_BUDGET } from "../types";
 import { initializeMcpSession, McpStatusError, postMcp, unwrapToolResult, type McpSession } from "./mcp";
@@ -327,7 +328,7 @@ export class BashiraAuth extends DurableObject<Env> {
         token,
         fetchImpl: (url, init) => this.trackedFetch(budget, url, init),
         nextId: () => ++this.rpcId,
-        clientInfo: { name: "jra-bashira-predict", version: "0.8.0" },
+        clientInfo: { name: "jra-bashira-predict", version: APP_VERSION },
       });
       this.session = opened.session;
       await this.ctx.storage.put("mcp_session", this.session);

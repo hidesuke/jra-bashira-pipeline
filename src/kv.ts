@@ -3,6 +3,8 @@ import { JobError, type KvListResult, type KvStore } from "./types";
 export const keys = {
   job: (raceKey: string) => `job:v1:${raceKey}`,
   lock: (raceKey: string) => `lock:v1:${raceKey}`,
+  /** その開催日のバッチ投入の要約。レースごとのキーは増やさない。 */
+  batch: (date: string) => `batch:v1:${date}`,
   notionPage: (raceKey: string) => `notion:page:v1:${raceKey}`,
   models: "config:models",
   modelsPrevious: "config:models:previous",

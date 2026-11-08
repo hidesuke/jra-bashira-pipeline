@@ -19,7 +19,7 @@ refresh が失敗したら予想は止めます。`invalid_grant`（HTTP 400 で
 
 ## MCP
 
-MCP の引数は実行時の `tools/list` で確認します。スキーマに無い引数やフィールドは送りません。`initialize` は先にプロトコル `2025-06-18` を試し、失敗したら `2025-03-26` を試します。セッション ID は応答ヘッダ `mcp-session-id` があるときだけ後続に付けます。
+MCP の `initialize` に渡す `clientInfo.version` は、`package.json` の `version` と同じです。引数は実行時の `tools/list` で確認します。スキーマに無い引数やフィールドは送りません。`initialize` は先にプロトコル `2025-06-18` を試し、失敗したら `2025-03-26` を試します。セッション ID は応答ヘッダ `mcp-session-id` があるときだけ後続に付けます。
 
 `columns` と `rows` は、行が配列のときとオブジェクトのときの両方を読みます。配列のときは `columns` の名前でオブジェクトにします。`name_resolution` は配列と、フィールド名をキーにしたオブジェクトの両方を読みます。同名馬は [same-name-horses.md](same-name-horses.md) です。
 
