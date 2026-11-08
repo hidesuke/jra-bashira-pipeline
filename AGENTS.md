@@ -1,20 +1,20 @@
 # エージェント向けのルール
 
-このリポジトリは公開リポジトリです。次のものは絶対にコミットしないでください。
+## コミットしないもの
 
-- プロンプトの本文（system、user、その下書き、差分、ログへの写し）
-- 秘密情報。API トークン、`NOTION_TOKEN`、`GEMINI_API_KEY`、`TOKEN_ENCRYPTION_KEY`、`ACCESS_AUD`、Access の Client Secret、`.dev.vars` の値
+このリポジトリは公開リポジトリである。次はコミットしない。
 
-プロンプトの本文は、非公開リポジトリ `hidesuke/jra-bashira-prompts` にだけ置きます。このリポジトリに書いてよいのは、KV のキー名、差し込み名、処理の説明までです。
+- プロンプトの本文。本文は非公開リポジトリ `hidesuke/jra-bashira-prompts` にだけ置く。このリポジトリに書いてよいのは、KV のキー名、差し込み名、処理の説明までである。
+- 秘密情報。トークン、Access の認証情報、`.dev.vars` の値を含む。
 
-## ユーザーに確認してから行うこと
+## 確認してから行うこと
 
 - マージ
-- 本番へのデプロイ（`wrangler deploy` と `wrangler secret put` を含む）
-- 本番の一次予想の生成の実行（本番の `POST /run` など）
+- 本番へのデプロイ（`wrangler deploy` と `wrangler secret put`）
+- 本番の一次予想の生成の実行（本番の `POST /run`）
 - Notion に書き込む書式の変更
 - Cloudflare の設定の変更（`wrangler.jsonc`、Workers Builds、Access、Queue、KV、Durable Object、サービスバインディング）
-- 新しいトップレベルの構成の追加（リポジトリ直下の新しいディレクトリや、Worker の入口が増える構成）
+- 新しいトップレベルの構成の追加（リポジトリ直下の新しいディレクトリ、Worker の入口が増える構成）
 
 ## 確認なしで行ってよいこと
 
@@ -25,17 +25,8 @@
 
 ## プルリクエストとテスト
 
-プルリクエストのタイトルと本文は日本語で書きます。コードやドキュメントを変更したら、出す前にテストを通します。
+プルリクエストのタイトルと本文は日本語で書く。変更したら `npm test` と `npm run typecheck` を通す。Worker の挙動は、依頼された範囲だけ変える。
 
-```bash
-npm test
-npm run typecheck
-```
+## プレビュー確認
 
-`npm run check` は型検査とテストの両方です。ドキュメントだけの変更でも、このコマンドが通ることを確認します。依頼の範囲を超えて Worker の挙動は変えないでください。
-
-## 既知のこと
-
-Workers Builds のプルリクエスト用プレビュー確認は、`wrangler.jsonc` に `previews` の設定が無いため必ず失敗します。これは前からある問題です。マージ後の本番ビルドは成功します。プレビューを通すために、頼まれていない `previews` の設定を足さないでください。
-
-詳細は [docs/known-issues.md](docs/known-issues.md) です。仕様の入口は [README.md](README.md) で、細目は `docs/` に分かれています。
+Workers Builds のプルリクエスト用プレビュー確認は失敗する。`wrangler.jsonc` に `previews` を足して通そうとしない。
