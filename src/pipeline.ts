@@ -6,7 +6,7 @@ import { composeRemarks, fillCourseUser, fillRaceUser, mergeGoing } from "./dify
 import { readRacePrediction } from "./extract-prediction";
 import { checkPredictionConsistency } from "./consistency";
 import { buildFormTasks, finishQualifiedFetch, FORM_BATCH_SIZE, FORM_FETCH_LIMIT, horseFormSnapshots, planFormFetch, type FormTask } from "./form";
-import { generateText } from "./gemini";
+import { courseCallRecord, generateText, raceCallRecord } from "./gemini";
 import { JobWriter, loadJob, type JobState } from "./job";
 import { keys, sleepMs } from "./kv";
 import { loadModels } from "./models";
@@ -447,6 +447,7 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       model: models.config.course,
       budget,
       fetcher: deps.fetch,
+      tools: [{ googleSearch: {} }],
       system: coursePrompt.system,
       prompt: fillCourseUser(coursePrompt.user, {
         venue: state.race.venue,
@@ -454,6 +455,9 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
         distance: distance == null ? "不明" : String(distance),
       }),
     });
+    state.gemini = { ...state.gemini, course: courseCallRecord(course) };
+    state.updatedAt = deps.now().toISOString();
+    await commitJob(deps, state);
     const umabashira = renderUmabashira({ race: state.race, entries: state.entries, formTasks: state.formTasks ?? [] });
     const snapshots = horseFormSnapshots(state.entries, state.formTasks ?? []);
     const raceInput = fillRaceUser(racePrompt.user, {
@@ -479,6 +483,9 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       system: racePrompt.system,
       prompt: raceInput,
     });
+    state.gemini = { ...state.gemini, race: raceCallRecord(race) };
+    state.updatedAt = deps.now().toISOString();
+    await commitJob(deps, state);
     const warnings = checkPredictionConsistency(race.text, snapshots);
     state.consistencyWarnings = warnings;
     if (warnings.length > 0) {

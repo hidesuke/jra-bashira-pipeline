@@ -50,6 +50,8 @@ function harness(options?: {
   failArchiveOnce?: boolean;
   externalBudget?: number;
   raceText?: string;
+  /** レース予想の generateContent だけ 500 にする。 */
+  failRaceGemini?: boolean;
   onEntries?: (args: Record<string, unknown>) => { ok: true; data: unknown } | null;
 }) {
   const kv = new MemoryKv();
@@ -219,7 +221,34 @@ function harness(options?: {
           ].join("\n"))
         : "コースは先行が残る";
       const modelVersion = isRace ? "gemini-race-001" : "gemini-course-001";
-      return Response.json({ modelVersion, candidates: [{ content: { parts: [{ text }] } }] });
+      if (isRace && options?.failRaceGemini) {
+        return Response.json({ error: { message: "race boom" } }, { status: 500 });
+      }
+      return Response.json({
+        modelVersion,
+        usageMetadata: {
+          promptTokenCount: isRace ? 100 : 10,
+          candidatesTokenCount: isRace ? 200 : 20,
+          thoughtsTokenCount: isRace ? 300 : 30,
+          totalTokenCount: isRace ? 600 : 60,
+          cachedContentTokenCount: 1,
+        },
+        candidates: [
+          {
+            finishReason: "STOP",
+            groundingMetadata: {
+              webSearchQueries: isRace ? ["レースでは検索しない"] : ["福島 芝 1600 コース", 3],
+              groundingChunks: [{ web: { title: isRace ? "RACE_CITATION" : "COURSE_CITATION" } }],
+            },
+            content: {
+              parts: [
+                { text: isRace ? "RACE_THOUGHT" : "COURSE_THOUGHT", thought: true },
+                { text },
+              ],
+            },
+          },
+        ],
+      });
     }
     if (url.includes("api.notion.com")) {
       const path = new URL(url).pathname;
@@ -326,10 +355,14 @@ describe("pipeline", () => {
     expect(env.geminiBodies).toHaveLength(2);
     const courseBody = env.geminiBodies[0] as {
       systemInstruction?: { parts?: Array<{ text?: string }> };
+      tools?: unknown;
+      generationConfig?: Record<string, unknown>;
       contents?: Array<{ parts?: Array<{ text?: string }> }>;
     };
     const courseUser = courseBody.contents?.[0]?.parts?.[0]?.text ?? "";
     expect(courseBody.systemInstruction?.parts?.[0]?.text).toBe("コースシステム");
+    expect(courseBody.tools).toEqual([{ googleSearch: {} }]);
+    expect(courseBody.generationConfig).toEqual({ thinkingConfig: { thinkingLevel: "high" } });
     expect(courseUser).toContain("福島");
     expect(courseUser).toContain("芝");
     expect(courseUser).toContain("1600");
@@ -338,12 +371,20 @@ describe("pipeline", () => {
     expect(courseUser).not.toContain("min_starts");
     const raceBody = env.geminiBodies[1] as {
       systemInstruction?: { parts?: Array<{ text?: string }> };
-      generationConfig?: unknown;
+      tools?: unknown;
+      generationConfig?: Record<string, unknown>;
       contents?: Array<{ parts?: Array<{ text?: string }> }>;
     };
     const raceUser = raceBody.contents?.[0]?.parts?.[0]?.text ?? "";
     expect(raceBody.systemInstruction?.parts?.[0]?.text).toBe("予測システム");
-    expect(raceBody.generationConfig).toBeUndefined();
+    expect(raceBody.tools).toBeUndefined();
+    expect(raceBody.generationConfig).toEqual({ thinkingConfig: { thinkingLevel: "high" } });
+    expect(raceBody.generationConfig).not.toHaveProperty("temperature");
+    expect(raceBody.generationConfig).not.toHaveProperty("maxOutputTokens");
+    expect(JSON.stringify(raceBody.generationConfig)).not.toContain("includeThoughts");
+    expect(raceUser).not.toContain("COURSE_THOUGHT");
+    expect(raceUser).not.toContain("COURSE_CITATION");
+    expect(raceUser).not.toContain("福島 芝 1600 コース");
     expect(raceUser).toContain("# 馬柱");
     expect(raceUser).toContain("2026-10-12");
     expect(raceUser).toContain("通過3-3-2-2");
@@ -379,6 +420,39 @@ describe("pipeline", () => {
     expect(bodyText).toContain("オッズ種別: 最終");
     expect(bodyText).toContain("2026-11-07T15:04:00+09:00");
     expect(bodyText).toContain("course_variant: null");
+    expect(bodyText).not.toContain("COURSE_THOUGHT");
+    expect(bodyText).not.toContain("RACE_THOUGHT");
+    expect(bodyText).not.toContain("COURSE_CITATION");
+    expect(bodyText).not.toContain("RACE_CITATION");
+    expect(bodyText).not.toContain("福島 芝 1600 コース");
+    expect(bodyText).not.toContain("レースでは検索しない");
+    const job = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(job.gemini).toEqual({
+      course: {
+        finishReason: "STOP",
+        modelVersion: "gemini-course-001",
+        usageMetadata: {
+          promptTokenCount: 10,
+          candidatesTokenCount: 20,
+          thoughtsTokenCount: 30,
+          totalTokenCount: 60,
+        },
+        webSearchQueryCount: 1,
+        webSearchQueries: ["福島 芝 1600 コース"],
+      },
+      race: {
+        finishReason: "STOP",
+        modelVersion: "gemini-race-001",
+        usageMetadata: {
+          promptTokenCount: 100,
+          candidatesTokenCount: 200,
+          thoughtsTokenCount: 300,
+          totalTokenCount: 600,
+        },
+      },
+    });
+    expect(JSON.stringify(job.gemini)).not.toContain("COURSE_CITATION");
+    expect(JSON.stringify(job.prediction)).not.toContain("COURSE_THOUGHT");
     await expect(env.kv.get(keys.notionPage(race.raceKey))).resolves.toBe("page-1");
     expect(env.notionCalls.some((call) => call.method === "DELETE")).toBe(false);
 
@@ -402,6 +476,21 @@ describe("pipeline", () => {
     expect(env.notionCalls.some((call) => call.method === "DELETE")).toBe(false);
     expect(env.notionCalls.some((call) => call.path.includes("dify"))).toBe(true);
     await expect(env.kv.get(keys.notionPage(race.raceKey))).resolves.toBe("page-2");
+  });
+
+  it("keeps the course call record when the race call fails", async () => {
+    const env = harness({ failRaceGemini: true });
+    await seedPrompts(env.kv);
+    const results = await drain(env, { kind: "start", runId: "run-race-fail", race, requestedBy: "Grok Bot" });
+    expect(results.at(-1)).toBe("retry");
+    expect(env.geminiBodies[0]).toMatchObject({ tools: [{ googleSearch: {} }] });
+    expect(env.geminiBodies[1]).not.toHaveProperty("tools");
+    const job = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(job.phase).toBe("predict");
+    expect(job.prediction).toBeNull();
+    expect(job.gemini?.course?.webSearchQueries).toEqual(["福島 芝 1600 コース"]);
+    expect(job.gemini?.course?.webSearchQueryCount).toBe(1);
+    expect(job.gemini?.race).toBeUndefined();
   });
 
   it("fills legacy Dify user tokens through the predict step", async () => {
