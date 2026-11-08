@@ -54,7 +54,7 @@ function harness(options?: {
   raceText?: string;
   summaryError?: boolean;
   courseSummaryMinCount?: number;
-  /** レース予想の generateContent だけ 500 にする。 */
+  /** レース予想の streamGenerateContent だけ 500 にする。 */
   failRaceGemini?: boolean;
   courseText?: string;
   onEntries?: (args: Record<string, unknown>) => { ok: true; data: unknown } | null;
@@ -64,6 +64,7 @@ function harness(options?: {
   const statBatches: number[] = [];
   const entryCalls: Array<Record<string, unknown>> = [];
   const geminiBodies: Array<Record<string, unknown>> = [];
+  const geminiUrls: string[] = [];
   const notionCalls: Array<{ method: string; path: string; body?: unknown }> = [];
   const createdIds: string[] = [];
   const archivedIds = new Set<string>();
@@ -269,6 +270,7 @@ function harness(options?: {
       });
     }
     if (url.includes("generativelanguage.googleapis.com")) {
+      geminiUrls.push(url);
       geminiBodies.push(body ?? {});
       const userText = ((body?.contents as Array<{ parts?: Array<{ text?: string }> }> | undefined)?.[0]?.parts?.[0]?.text) ?? "";
       const isRace = userText.includes("# 馬柱");
@@ -293,7 +295,7 @@ function harness(options?: {
       if (isRace && options?.failRaceGemini) {
         return Response.json({ error: { message: "race boom" } }, { status: 500 });
       }
-      return Response.json({
+      return geminiSse({
         modelVersion,
         usageMetadata: {
           promptTokenCount: isRace ? 100 : 10,
@@ -393,7 +395,13 @@ function harness(options?: {
       pending.push(message);
     },
   };
-  return { deps, kv, pending, statBatches, entryCalls, geminiBodies, notionCalls, archivedIds, createdIds };
+  return { deps, kv, pending, statBatches, entryCalls, geminiBodies, geminiUrls, notionCalls, archivedIds, createdIds };
+}
+
+function geminiSse(payload: unknown): Response {
+  return new Response(`data: ${JSON.stringify(payload)}\n\n`, {
+    headers: { "content-type": "text/event-stream" },
+  });
 }
 
 function sampleCareerRows(name: string): Record<string, unknown>[] {
@@ -558,6 +566,10 @@ describe("pipeline", () => {
     expect(results.every((result) => result === "ack")).toBe(true);
     expect(env.statBatches).toEqual([8, 1, 8, 2, 1]);
     expect(env.geminiBodies).toHaveLength(2);
+    expect(env.geminiUrls).toEqual([
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?alt=sse",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?alt=sse",
+    ]);
     const courseBody = env.geminiBodies[0] as {
       systemInstruction?: { parts?: Array<{ text?: string }> };
       tools?: unknown;
