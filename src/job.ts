@@ -1,6 +1,7 @@
 import type { CourseSummaryRecord } from "./course-summary";
 import type { ConsistencyWarning } from "./consistency";
 import type { FormTask } from "./form";
+import type { TicketCountCorrection } from "./ticket-count";
 import type { CourseGeminiCall, GeminiCallRecord } from "./gemini";
 import type { OddsSummary } from "./odds";
 import type { StatTask } from "./stats";
@@ -57,6 +58,8 @@ export interface JobState {
   notionContinuations?: number;
   /** 予想本文と成績の食い違い。Notion には書かない。未実施のジョブでは未設定。 */
   consistencyWarnings?: ConsistencyWarning[];
+  /** 買い目の点数を列から数え直し、見出しの数字を差し替えた記録。差し替えが無いときは未設定。 */
+  ticketCountCorrections?: TicketCountCorrection[];
   /**
    * generateContent ごとの finishReason、modelVersion、usageMetadata。
    * コース分析だけ検索クエリも入る。本文と引用は入れない。

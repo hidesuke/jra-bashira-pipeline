@@ -6,6 +6,7 @@ import { collectCourseSummary, courseSummaryText, failedCourseSummary } from "./
 import { composeRemarks, fillCourseUser, fillRaceUser, mergeGoing } from "./dify-input";
 import { readRacePrediction } from "./extract-prediction";
 import { checkPredictionConsistency } from "./consistency";
+import { correctTicketCounts, type TicketCountCorrection } from "./ticket-count";
 import { buildFormTasks, finishQualifiedFetch, FORM_BATCH_SIZE, FORM_FETCH_LIMIT, horseFormSnapshots, planFormFetch, type FormTask } from "./form";
 import { courseCallRecord, generateText, raceCallRecord } from "./gemini";
 import { JobWriter, loadJob, type JobState } from "./job";
@@ -534,7 +535,16 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       raceOutput: race.text,
       raceWebSearchQueries: race.webSearchQueries,
     });
-    const warnings = checkPredictionConsistency(race.text, snapshots);
+    let raceText = race.text;
+    let ticketCountCorrections: TicketCountCorrection[] = [];
+    try {
+      const corrected = correctTicketCounts(race.text);
+      raceText = corrected.text;
+      ticketCountCorrections = corrected.corrections;
+    } catch (err) {
+      deps.log?.("ticket_count_skipped", { raceKey: state.race.raceKey, error: errorMessage(err) });
+    }
+    const warnings = checkPredictionConsistency(raceText, snapshots);
     state.consistencyWarnings = warnings;
     if (warnings.length > 0) {
       deps.log?.("prediction_consistency", {
@@ -543,7 +553,14 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
         warnings: warnings.map((warning) => warning.message),
       });
     }
-    const fields = readRacePrediction(race.text);
+    const fields = readRacePrediction(raceText);
+    if (ticketCountCorrections.length > 0) {
+      state.ticketCountCorrections = ticketCountCorrections;
+      deps.log?.("ticket_count_corrected", {
+        raceKey: state.race.raceKey,
+        corrections: ticketCountCorrections,
+      });
+    }
     state.prediction = {
       courseText: course.text,
       courseModel: models.config.course,

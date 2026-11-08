@@ -44,6 +44,8 @@ curl -sS "https://<worker>/admin/jobs?race_key=20261107-03-11" \
 
 `odds` があるときは `available`、`kind`、`observed_at_jst`、`reason` です。
 
+`ticket_count_corrections` は、買い目の点数を差し替えた記録です。差し替えが無いときは空配列です。1 件は `tickets`（券種）、`declared`（見出しの点数）、`counted`（列から数えた点数）です。見方は [pipeline.md](pipeline.md) です。
+
 ## 予想に渡した入力
 
 ```bash
