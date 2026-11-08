@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { handleRequest, type HttpDeps } from "../src/http";
 import type { JobState } from "../src/job";
 import { keys, MemoryKv } from "../src/kv";
+import { saveLlmTrace } from "../src/llm-trace";
 import { savePredictInput } from "../src/predict-input";
 import type { JobMessage } from "../src/types";
 
@@ -328,5 +329,209 @@ describe("http", () => {
     const full = await handleRequest(authed("/admin/jobs/input?race_key=20261108-05-11"), http);
     const fullBody = (await full.json()) as { race_input?: string };
     expect(fullBody.race_input).toBe("入力BODY");
+  });
+
+  it("returns a race inspection in json and markdown without secrets or the system prompt", async () => {
+    const { http, kv } = deps();
+    const open = await handleRequest(new Request("https://worker.example/admin/inspect?race_key=20261108-05-11"), http);
+    expect(open.status).toBe(403);
+    const missing = await handleRequest(authed("/admin/inspect"), http);
+    expect(missing.status).toBe(400);
+    const absent = await handleRequest(authed("/admin/inspect?race_key=20261108-05-11"), http);
+    expect(absent.status).toBe(404);
+    const badFormat = await handleRequest(authed("/admin/inspect?race_key=20261108-05-11&format=html"), http);
+    expect(badFormat.status).toBe(400);
+
+    const raceKey = "20261108-05-11";
+    const courseOutput = `${"あ".repeat(9000)}ENDMARK`;
+    const raceOutput = "### レース情報\n先行有利の全文です\n```json\n{}\n```";
+    const state = {
+      runId: "run-inspect",
+      race: {
+        raceKey,
+        raceId: raceKey,
+        date: "2026-11-08",
+        venue: "東京",
+        venueCode: "05",
+        raceNumber: 11,
+      },
+      requestedBy: "Grok Bot",
+      phase: "done",
+      remarks: "ユーザー備考",
+      baba: {
+        venue: {
+          venueName: "東京",
+          weather: "晴",
+          cushion: 9.1,
+          turf: { condition: "良" },
+          apiKey: "gemini-key-secret",
+          nested: { refresh_token: "refresh-secret" },
+        },
+      },
+      raceRow: {
+        race_name_main: "テストS",
+        grade: "G2",
+        surface: "芝",
+        distance: 1600,
+        weather: "曇",
+        track_condition: "重",
+        notionToken: "notion-secret",
+      },
+      entries: [],
+      formTasks: [],
+      odds: {
+        source: "get_odds",
+        available: true,
+        kind: "最終",
+        observedAtJst: "2026-11-08T15:00:00+09:00",
+        reason: null,
+        detail: null,
+        horses: [{ horseNumber: 1, selection: "1", odds: 3.2, oddsMin: null, oddsMax: null, status: null, kind: "最終", observedAtJst: null }],
+      },
+      courseVariant: null,
+      statTasks: [],
+      prediction: {
+        courseText: courseOutput,
+        courseModel: "gemini-flash-latest",
+        raceModel: "gemini-flash-latest",
+        courseModelVersion: "mv-course",
+        raceModelVersion: "mv-race",
+        coursePromptVersion: "course-v9",
+        racePromptVersion: "race-v9",
+        指数分布: "1強・独走型",
+        自信度: "A",
+        波乱度: "堅実",
+        印: "◎ 1 ア",
+        予想本文: "先行有利の全文です",
+      },
+      notionPageId: "page-1",
+      gemini: {
+        course: {
+          finishReason: "STOP",
+          modelVersion: "mv-course",
+          usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 22, thoughtsTokenCount: 33, totalTokenCount: 66 },
+          webSearchQueryCount: 1,
+          webSearchQueries: ["東京 芝 1600"],
+        },
+        race: {
+          finishReason: "MAX_TOKENS",
+          modelVersion: "mv-race",
+          usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 200, thoughtsTokenCount: 300, totalTokenCount: 600 },
+        },
+      },
+      courseSummary: { text: "脚質は先行", error: null, status: "ok" },
+      system: "SYS_COURSE_DO_NOT_RETURN",
+      geminiApiKey: "gemini-key-secret",
+      updatedAt: "2026-11-08T01:00:00.000Z",
+    };
+    await kv.put(keys.job(raceKey), JSON.stringify(state));
+    await kv.put(keys.prompt("course"), JSON.stringify({ version: "course-v9", system: "SYS_COURSE_DO_NOT_RETURN", user: "ignored" }));
+    await kv.put(keys.prompt("race"), JSON.stringify({ version: "race-v9", system: "SYS_RACE_DO_NOT_RETURN", user: "ignored" }));
+    await savePredictInput(kv, {
+      raceKey,
+      runId: "run-inspect",
+      umabashira: "馬柱の全文",
+      raceInput: "レースへ渡したユーザー文",
+      horses: [],
+    });
+    await saveLlmTrace(kv, raceKey, {
+      coursePromptVersion: "course-v9",
+      racePromptVersion: "race-v9",
+      courseModel: "gemini-flash-latest",
+      raceModel: "gemini-flash-latest",
+      courseUser: "東京\n芝\n1600\n脚質は先行",
+      courseOutput,
+      raceOutput,
+      raceWebSearchQueries: [],
+    });
+
+    const listed = await handleRequest(authed(`/admin/inspect?raceKey=${raceKey}`), http);
+    expect(listed.status).toBe(200);
+    expect(listed.headers.get("content-type")).toContain("application/json");
+    const body = await listed.text();
+    expect(body).not.toContain("SYS_COURSE_DO_NOT_RETURN");
+    expect(body).not.toContain("SYS_RACE_DO_NOT_RETURN");
+    expect(body).not.toContain("gemini-key-secret");
+    expect(body).not.toContain("refresh-secret");
+    expect(body).not.toContain("notion-secret");
+    const view = JSON.parse(body) as {
+      phase: string;
+      race: { venue: string; surface: string; distance: number; race_name: string };
+      going: { weather: string; condition: string };
+      umabashira: string;
+      course: { user_text: string; output_text: string; prompt_version: string; finishReason: string; webSearchQueries: string[]; usageMetadata: { thoughtsTokenCount: number } };
+      race_prediction: { user_text: string; output_text: string; 予想本文: string; webSearchQueries: string[]; finishReason: string };
+      course_summary: string;
+      course_summary_error: string | null;
+      odds: { available: boolean; horses: Array<{ horse_number: number; odds: number }> };
+      baba: { venue: { weather: string; apiKey?: string; nested?: { refresh_token?: string } } };
+    };
+    expect(view.phase).toBe("done");
+    expect(view.race).toMatchObject({ venue: "東京", surface: "芝", distance: 1600, race_name: "テストS" });
+    expect(view.going.condition).toBe("重");
+    expect(view.going.weather).toBe("曇");
+    expect(view.umabashira).toBe("馬柱の全文");
+    expect(view.course.user_text).toContain("脚質は先行");
+    expect(view.course.output_text).toBe(courseOutput);
+    expect(view.course.prompt_version).toBe("course-v9");
+    expect(view.course.finishReason).toBe("STOP");
+    expect(view.course.webSearchQueries).toEqual(["東京 芝 1600"]);
+    expect(view.course.usageMetadata.thoughtsTokenCount).toBe(33);
+    expect(view.race_prediction.user_text).toBe("レースへ渡したユーザー文");
+    expect(view.race_prediction.output_text).toBe(raceOutput);
+    expect(view.race_prediction.予想本文).toBe("先行有利の全文です");
+    expect(view.race_prediction.webSearchQueries).toEqual([]);
+    expect(view.race_prediction.finishReason).toBe("MAX_TOKENS");
+    expect(view.course_summary).toBe("脚質は先行");
+    expect(view.course_summary_error).toBeNull();
+    expect(view.odds.available).toBe(true);
+    expect(view.odds.horses[0]).toMatchObject({ horse_number: 1, odds: 3.2 });
+    expect(view.baba.venue.weather).toBe("晴");
+    expect(view.baba.venue.apiKey).toBeUndefined();
+    expect(view.baba.venue.nested?.refresh_token).toBeUndefined();
+
+    const withoutSummary = JSON.parse((await kv.get(keys.job(raceKey))) ?? "{}") as { courseSummary?: unknown };
+    delete withoutSummary.courseSummary;
+    await kv.put(keys.job("20261108-05-12"), JSON.stringify({ ...withoutSummary, race: { ...state.race, raceKey: "20261108-05-12" }, phase: "error", error: "止めた", prediction: null }));
+    const plain = await handleRequest(authed("/admin/inspect?race_key=20261108-05-12"), http);
+    const plainBody = (await plain.json()) as { course_summary: string | null; course_summary_error: string | null; course: { output_text: string | null } };
+    expect(plainBody.course_summary).toBeNull();
+    expect(plainBody.course_summary_error).toBeNull();
+    expect(plainBody.course.output_text).toBeNull();
+
+    const page = await handleRequest(authed(`/admin/inspect?race_key=${raceKey}&format=markdown`), http);
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-type")).toContain("text/markdown");
+    const markdown = await page.text();
+    for (const heading of ["## レース情報", "## エラー", "## 馬場", "## オッズ", "## 馬柱", "## コース分析", "### ユーザー文", "### 出力", "### 呼び出し結果", "## レース予想", "### 予想本文", "## コースデータ要約", "## その他の入力"]) {
+      expect(markdown).toContain(heading);
+    }
+    expect(markdown).toContain(courseOutput);
+    expect(markdown).toContain("ENDMARK");
+    expect(markdown).toContain("レースへ渡したユーザー文");
+    expect(markdown).toContain("馬柱の全文");
+    expect(markdown).toContain("先行有利の全文です");
+    expect(markdown).toContain("finishReason: STOP");
+    expect(markdown).toContain("東京 芝 1600");
+    expect(markdown).toContain("脚質は先行");
+    expect(markdown).not.toContain("SYS_COURSE_DO_NOT_RETURN");
+    expect(markdown).not.toContain("gemini-key-secret");
+    expect(markdown).not.toContain("（コース分析を省略）");
+
+    const day = await handleRequest(authed("/admin/inspect?date=2026-11-08"), http);
+    expect(day.status).toBe(200);
+    const listedDay = (await day.json()) as { date: string; jobs: Array<{ race_key: string; phase: string; error: string | null }> };
+    expect(listedDay.date).toBe("2026-11-08");
+    expect(listedDay.jobs.map((job) => job.race_key)).toEqual(["20261108-05-11", "20261108-05-12"]);
+    expect(listedDay.jobs[0]).toMatchObject({ phase: "done", error: null });
+    expect(listedDay.jobs[1]).toMatchObject({ phase: "error", error: "止めた" });
+    const dayPage = await handleRequest(authed("/admin/inspect?date=20261108&format=markdown"), http);
+    expect(await dayPage.text()).toContain("`20261108-05-11` phase=done");
+
+    await kv.put(keys.job("20261108-05-09"), "SECRET_JOB_BODY");
+    const broken = await handleRequest(authed("/admin/inspect?date=2026-11-08"), http);
+    const brokenText = await broken.text();
+    expect(brokenText).not.toContain("SECRET_JOB_BODY");
+    expect(brokenText).toContain("20261108-05-09");
   });
 });

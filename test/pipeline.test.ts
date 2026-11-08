@@ -4,6 +4,7 @@ import { pageBlocks } from "../src/body";
 import { COURSE_USER_DIFY_TOKENS, COURSE_USER_PLACEHOLDERS, RACE_USER_DIFY_TOKENS, RACE_USER_PLACEHOLDERS } from "../src/dify-input";
 import type { JobState } from "../src/job";
 import { keys, MemoryKv } from "../src/kv";
+import { loadLlmTrace } from "../src/llm-trace";
 import { loadPredictInput } from "../src/predict-input";
 import { handleJobMessage, NOTION_CONTINUATION_LIMIT, type PipelineDeps } from "../src/pipeline";
 import { QUEUE_MAX_RETRIES, type JobMessage, type RaceRef } from "../src/types";
@@ -560,6 +561,13 @@ describe("pipeline", () => {
     expect(job.gemini?.course?.webSearchQueries).toEqual(["福島 芝 1600 コース"]);
     expect(job.gemini?.course?.webSearchQueryCount).toBe(1);
     expect(job.gemini?.race).toBeUndefined();
+    const trace = await loadLlmTrace(env.kv, race.raceKey);
+    expect(trace?.courseOutput).toBe("コースは先行が残る");
+    expect(trace?.courseUser).toContain("福島");
+    expect(trace?.coursePromptVersion).toBe("v1");
+    expect(trace?.raceOutput).toBeNull();
+    expect(JSON.stringify(trace)).not.toContain("コースシステム");
+    expect(JSON.stringify(trace)).not.toContain("予測システム");
   });
 
   it("fills legacy Dify user tokens through the predict step", async () => {
@@ -954,6 +962,26 @@ describe("pipeline", () => {
     expect(notion).not.toContain("予想本文は");
     expect(notion).not.toContain("同名馬のため近走取得不可");
     expect(job.phase).toBe("done");
+  });
+
+  it("stores the course user text and both model outputs without the system prompt", async () => {
+    const env = harness();
+    await seedPrompts(env.kv);
+    const results = await drain(env, { kind: "start", runId: "run-trace", race, requestedBy: "Grok Bot" });
+    expect(results.every((result) => result === "ack")).toBe(true);
+    const trace = await loadLlmTrace(env.kv, race.raceKey);
+    expect(trace?.courseOutput).toBe("コースは先行が残る");
+    expect(trace?.raceOutput).toContain("先行有利");
+    expect(trace?.courseUser).toContain("福島");
+    expect(trace?.courseUser).toContain("1600");
+    expect(trace?.coursePromptVersion).toBe("v1");
+    expect(trace?.racePromptVersion).toBe("v1");
+    expect(trace?.raceWebSearchQueries).toEqual(["レースでは検索しない"]);
+    const raw = (await env.kv.get(keys.llmTrace(race.raceKey))) ?? "";
+    expect(raw).not.toContain("コースシステム");
+    expect(raw).not.toContain("予測システム");
+    const job = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(JSON.stringify(job.gemini?.race)).not.toContain("レースでは検索しない");
   });
 });
 

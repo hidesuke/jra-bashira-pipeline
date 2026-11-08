@@ -46,6 +46,8 @@ export interface GeminiText {
   usageMetadata: GeminiUsageMetadata;
   /** 応答の webSearchQueries。レース予想ではジョブに残さない。本文には混ぜない。 */
   webSearchQueries: string[];
+  /** 渡した user メッセージ。system は含めない。 */
+  userText: string;
 }
 
 interface GenerateTextInput {
@@ -164,6 +166,7 @@ async function callGemini(input: GenerateTextInput, json: boolean): Promise<Gemi
     finishReason: typeof candidate?.finishReason === "string" ? candidate.finishReason : null,
     usageMetadata: readUsage(payload.usageMetadata),
     webSearchQueries: readWebSearchQueries(candidate),
+    userText: input.prompt,
   };
 }
 

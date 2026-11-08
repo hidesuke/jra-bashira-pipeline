@@ -40,10 +40,18 @@ export interface RaceRef {
   raceNumber: number;
 }
 
+export interface KvListResult {
+  keys: Array<{ name: string }>;
+  list_complete: boolean;
+  cursor?: string;
+}
+
 export interface KvStore {
   get(key: string): Promise<string | null>;
   put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
   delete(key: string): Promise<void>;
+  /** 日付のジョブ一覧。本番の KV バインディングは list を持つ。 */
+  list?(options?: { prefix?: string; limit?: number; cursor?: string }): Promise<KvListResult>;
 }
 
 export type JobMessage =

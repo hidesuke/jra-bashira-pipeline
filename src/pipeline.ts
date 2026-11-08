@@ -22,6 +22,7 @@ import {
   type NotionSchema,
 } from "./notion";
 import { interpretOdds } from "./odds";
+import { saveLlmTrace } from "./llm-trace";
 import { loadPrompt } from "./prompts";
 import { numberField, rowsToObjects, stringField } from "./rows";
 import { ambiguousNameMessage } from "./bashira/mcp";
@@ -493,6 +494,14 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
     state.gemini = { ...state.gemini, course: courseCallRecord(course) };
     state.updatedAt = deps.now().toISOString();
     await commitJob(deps, state);
+    await saveLlmTrace(deps.kv, state.race.raceKey, {
+      coursePromptVersion: coursePrompt.version,
+      racePromptVersion: racePrompt.version,
+      courseModel: models.config.course,
+      raceModel: models.config.race,
+      courseUser: course.userText,
+      courseOutput: course.text,
+    });
     const umabashira = renderUmabashira({ race: state.race, entries: state.entries, formTasks: state.formTasks ?? [] });
     const snapshots = horseFormSnapshots(state.entries, state.formTasks ?? []);
     const raceInput = fillRaceUser(racePrompt.user, {
@@ -521,6 +530,10 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
     state.gemini = { ...state.gemini, race: raceCallRecord(race) };
     state.updatedAt = deps.now().toISOString();
     await commitJob(deps, state);
+    await saveLlmTrace(deps.kv, state.race.raceKey, {
+      raceOutput: race.text,
+      raceWebSearchQueries: race.webSearchQueries,
+    });
     const warnings = checkPredictionConsistency(race.text, snapshots);
     state.consistencyWarnings = warnings;
     if (warnings.length > 0) {
