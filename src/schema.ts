@@ -55,6 +55,20 @@ export function assertToolArgs(
   }
 }
 
+/**
+ * 必須列はそのまま並べ、任意列は tools/list にあるものだけ足す。
+ * 任意列が無いときにジョブは止めない。呼び出し回数は増えない。
+ */
+export function selectColumns(
+  catalog: ToolCatalog,
+  toolName: string,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): string[] {
+  const known = new Set(catalog.tools[toolName]?.fields ?? []);
+  return [...required, ...optional.filter((field) => known.has(field))];
+}
+
 export function assertFields(catalog: ToolCatalog, toolName: string, fields: string[]): void {
   const shape = catalog.tools[toolName];
   if (!shape) {

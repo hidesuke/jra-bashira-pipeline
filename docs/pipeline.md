@@ -9,7 +9,7 @@
 1. `collect`（メッセージ `start`）。馬場を 1 回取り、`tools/list` のあと `get_races`、出馬表の `get_entries`、単勝の `get_odds` を取る。
 2. `form`（メッセージ `form`）。走れる馬の近走を、未処理 8 頭ずつ取る。
 3. `stats`（メッセージ `stats`）。`get_stats` を、未処理 8 件ずつ取る。
-4. `predict`。コースデータ要約を作り、KV のプロンプトでコース分析を作り、馬柱と合わせてレース予想を作る。コース分析だけ Google 検索を付ける。両方の思考レベルは `high`。渡し方は [prompts.md](prompts.md) です。
+4. `predict`。コースデータ要約を作り、KV のプロンプトでコース分析を作り、レース情報と馬柱を合わせてレース予想を作る。コース分析だけ Google 検索を付ける。両方の思考レベルは `high`。渡し方は [prompts.md](prompts.md) です。
 5. `notion`。ページを作り、続きがあれば同じページへ追記する。
 6. `done` または `error`。
 
@@ -27,6 +27,8 @@
 
 コース分析のユーザー文と、コース分析・レース予想の出力全文は、同じ KV の `trace:v1:{raceKey}` に残します。システムプロンプトの本文は残しません。馬柱とレース予想のユーザー文は、これまでどおり `input:v1:{raceKey}` です。値の上限は馬柱の保存と同じです。見方は [admin.md](admin.md) の `GET /admin/inspect` です。
 
+レース予想のユーザー文には、レース名、グレード、クラス、競走種別、頭数、コース（A〜D）、斤量種別、発走時刻と、各馬の調教師・馬体重を足します。出典は collect で既に取る `get_races` と出馬表の `get_entries` です。`trainer_east_west` と `horse_weight_difference_with_previous_race` は、tools/list にあるときだけ列に足します。追加の呼び出しは 0 回です。内外回りと仮柵は項目が無いので空欄です。オッズはこの入力に足しません。`get_odds` はこれまでどおり Notion 用の 1 回だけです。値が空でも予想は止めず、空欄にした項目をジョブの `raceInputGaps` に残します。中身は [prompts.md](prompts.md) と [umabashira.md](umabashira.md) です。
+
 レース予想の本文をジョブに保存する前に、買い目の点数を馬番の列から数え直します。見出しの券種（3連複、3連単、馬連、馬単、ワイドなど）ごとに、フォーメーション、ボックス、流しの列を読み、同じ馬が重なる組と、同じ組の重複を除いて数えます。見出しの点数と違うときだけ、その数字を差し替えます。列が読めない買い目は本文を変えません。数え直しに失敗しても予想は止めません。差し替えたときはジョブの `ticketCountCorrections` とログ `ticket_count_corrected` に、券種、見出しの点数、数え直した点数を残します。`trace:v1:{raceKey}` のモデル出力は、差し替える前のままです。Notion の見出し、並び、文言は変えません。
 
 ## 外部呼び出しの上限
@@ -39,6 +41,8 @@ Free プランの外部 `fetch` は 1 呼び出し 50 件まで、とコード�
 | Durable Object の外部 `fetch` | `DO_EXTERNAL_BUDGET` | 40 |
 
 KV、Queue、Durable Object への内部呼び出しは、この外部件数に入れません。以前の README は、Free プランの内部呼び出し上限を 1000 と書いていました。その数は、このリポジトリの定数にはありません。
+
+レース情報を足すための外部 `fetch` は 0 回です。既存の `get_races` 1 回と、出馬表の `get_entries` 1 回の列を増やすだけです。Notion 段の予算 45 も変えません。
 
 上限に達した Worker は、ジョブを分割して止める再試行可能なエラーにします。Notion へ書き始めたあとなら、下の「Notion の続き」に従います。
 

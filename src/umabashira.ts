@@ -50,6 +50,19 @@ export function formatPastRun(row: Record<string, unknown>): string {
   return `- ${parts.join(" / ")}`;
 }
 
+/** get_entries の trainer_east_west。東は美浦、西は栗東。招待はそのまま。 */
+const STABLE_LABEL: Record<string, string> = { 東: "美浦", 西: "栗東", 招待: "招待" };
+
+/** 馬柱に足した調教師・馬体重のうち、空だったもの。処理は続ける。 */
+export function horseFactGaps(entries: Record<string, unknown>[]): string[] {
+  const horses = [...entries].sort((a, b) => (numberField(a, "horse_number") ?? 99) - (numberField(b, "horse_number") ?? 99));
+  const gaps: string[] = [];
+  for (const entry of horses) {
+    gaps.push(...trainerFact(entry).gaps, ...weightFact(entry).gaps);
+  }
+  return gaps;
+}
+
 function horseBlock(entry: Record<string, unknown>, task: FormTask | undefined): string {
   const number = numberField(entry, "horse_number") ?? "?";
   const name = stringField(entry, "horse_name") ?? "馬名不明";
@@ -63,6 +76,8 @@ function horseBlock(entry: Record<string, unknown>, task: FormTask | undefined):
     .join("・");
   const lines = [
     `### ${number} ${name}（${profile}）`,
+    trainerFact(entry).text,
+    weightFact(entry).text,
     `父 ${stringField(entry, "sire_name") ?? "—"} / 母父 ${stringField(entry, "broodmare_sire_name") ?? "—"}`,
     `今回単勝 ${numberField(entry, "win_odds") ?? "—"} / 今回人気 ${numberField(entry, "win_odds_rank") ?? "—"}`,
   ];
@@ -105,6 +120,33 @@ function placeLabel(row: Record<string, unknown>): string {
     .filter((part): part is string => Boolean(part))
     .join("・");
   return extra ? `${withHeads}（${extra}）` : withHeads;
+}
+
+function trainerFact(entry: Record<string, unknown>): { text: string; gaps: string[] } {
+  const label = horseLabel(entry);
+  const trainer = stringField(entry, "trainer_name");
+  const raw = stringField(entry, "trainer_east_west");
+  const place = raw == null ? null : (STABLE_LABEL[raw] ?? raw);
+  const gaps: string[] = [];
+  if (!trainer) gaps.push(`${label}の調教師`);
+  else if (!place) gaps.push(`${label}の調教師の所属`);
+  const who = trainer ?? "—";
+  return { text: place ? `調教師 ${who}（${place}）` : `調教師 ${who}`, gaps };
+}
+
+function weightFact(entry: Record<string, unknown>): { text: string; gaps: string[] } {
+  const weight = numberField(entry, "horse_weight");
+  if (weight == null) return { text: "馬体重 —", gaps: [`${horseLabel(entry)}の馬体重`] };
+  const diff = numberField(entry, "horse_weight_difference_with_previous_race");
+  if (diff == null) return { text: `馬体重 ${trimNum(weight)}kg（増減—）`, gaps: [] };
+  const signed = diff > 0 ? `+${trimNum(diff)}` : trimNum(diff);
+  return { text: `馬体重 ${trimNum(weight)}kg（${signed}）`, gaps: [] };
+}
+
+function horseLabel(entry: Record<string, unknown>): string {
+  const number = numberField(entry, "horse_number") ?? "?";
+  const name = stringField(entry, "horse_name") ?? "馬名不明";
+  return `${number} ${name}`;
 }
 
 function courseLabel(row: Record<string, unknown>): string {

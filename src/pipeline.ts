@@ -28,9 +28,10 @@ import { loadPrompt } from "./prompts";
 import { numberField, rowsToObjects, stringField } from "./rows";
 import { ambiguousNameMessage } from "./bashira/mcp";
 import { savePredictInput } from "./predict-input";
-import { renderUmabashira } from "./umabashira";
+import { buildRaceFacts } from "./race-facts";
+import { horseFactGaps, renderUmabashira } from "./umabashira";
 import type { BashiraPort } from "./bashira/port";
-import { assertFields, assertToolArgs, catalogFromTools } from "./schema";
+import { assertFields, assertToolArgs, catalogFromTools, selectColumns } from "./schema";
 import { buildStatTasks, hydrateStatCache, writeStatCache, yearFrom } from "./stats";
 import {
   errorMessage,
@@ -130,6 +131,12 @@ const ENTRY_COLUMNS = [
   "prev_surface",
   "days_since_last_race",
 ];
+
+/**
+ * 出馬表の get_entries に足す列。tools/list に無いものは外し、呼び出しは増やさない。
+ * 調教師の所属（東=美浦、西=栗東）と、馬体重の前走差。
+ */
+const OPTIONAL_ENTRY_COLUMNS = ["trainer_east_west", "horse_weight_difference_with_previous_race"] as const;
 
 const SCRATCHED = new Set(["出走取消", "発走除外", "競走除外"]);
 
@@ -271,7 +278,7 @@ async function collect(message: Extract<JobMessage, { kind: "start" }>, deps: Pi
       race_track: message.race.venue,
       race_number: message.race.raceNumber,
     },
-    columns: ENTRY_COLUMNS,
+    columns: selectColumns(catalog, "get_entries", ENTRY_COLUMNS, OPTIONAL_ENTRY_COLUMNS),
     limit: 50,
     order_by: "horse_number",
     order: "asc",
@@ -505,7 +512,10 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
     });
     const umabashira = renderUmabashira({ race: state.race, entries: state.entries, formTasks: state.formTasks ?? [] });
     const snapshots = horseFormSnapshots(state.entries, state.formTasks ?? []);
+    const facts = buildRaceFacts({ raceRow: state.raceRow, entries: state.entries });
+    state.raceInputGaps = [...facts.gaps, ...horseFactGaps(state.entries)];
     const raceInput = fillRaceUser(racePrompt.user, {
+      race_facts: facts.text,
       umabashira,
       course_analysis: course.text,
       weather: going.weather,

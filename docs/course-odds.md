@@ -17,7 +17,7 @@
 
 人気（`win_odds_rank`）では集計しません。集計条件にそのフィールドが入っていたら、実行前に止めます。該当行が 0 のタスクは「該当なし、または min_starts 未満」と注記します。
 
-内・外はデータが無いので `course_variant` は常に null です。`rail_type` は馬柱の近走に、馬場 API の使用コースは備考に、参考として渡します。内・外には読み替えません。
+内・外はデータが無いので `course_variant` は常に null です。`rail_type` は馬柱の近走と、レース予想の `{{race_facts}}` のコース（A〜D）に渡します。馬場 API の使用コースは備考に残します。内外回りと仮柵は BASHIRA に項目が無く、レース情報では空欄です。内・外には読み替えません。
 
 成績は KV に 7 日キャッシュします。キーは `stats:v2:{id}:{場}:{馬場}:{距離}:{開始年}:{min_starts}:{対象名}` です。`id` は `bracket`、`corner:1-3`、`corner:4-6`、`corner:7-10`、`corner:11plus`、`track_condition`、`sire`、`broodmare_sire` です。騎手だけ `id` を `jockey` にまとめ、対象名で分けます。対象名は父、母父、騎手の名前を並べたもので、対象が無い集計は `-` です。キャッシュがあっても、その結果はプロンプトにも Notion にも渡しません。[pipeline.md](pipeline.md) を参照してください。
 
