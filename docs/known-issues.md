@@ -1,10 +1,8 @@
 # 既知の問題
 
-## Workers Builds のプルリクエストプレビュー
+## プルリクエストのプレビュー
 
-Workers Builds のプルリクエスト用プレビュー確認は、必ず失敗します。`wrangler.jsonc` に `previews` の設定が無いためです。これは前からある問題で、このリポジトリの不具合として新しく入ったものではありません。
-
-マージ後の本番ビルドは成功します。プレビューを通すための `previews` 設定は、頼まれない限り足しません。本番のビルドコマンドとデプロイコマンドは [README](../README.md) のとおりです。
+プレビュー確認は通る。本番の KV、Queue、cron、シークレットは渡していない。`BABA` は本番の `jra-dify-pipeline` を読む。設定の中身は [operations.md](operations.md) にある。
 
 ## `.dev.vars.example` に `ACCESS_AUD` が無い
 

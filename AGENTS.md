@@ -27,6 +27,6 @@
 
 プルリクエストのタイトルと本文は日本語で書く。変更したら `npm test` と `npm run typecheck` を通す。Worker の挙動は、依頼された範囲だけ変える。
 
-## プレビュー確認
+## プレビュー
 
-Workers Builds のプルリクエスト用プレビュー確認は失敗する。`wrangler.jsonc` に `previews` を足して通そうとしない。
+`wrangler.jsonc` の `previews` に、本番の KV、Queue、cron、シークレット、本番の Notion データベース ID を足さない。`BABA` は本番の `jra-dify-pipeline` を読む設定のままにする。
