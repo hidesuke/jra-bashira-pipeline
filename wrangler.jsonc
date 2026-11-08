@@ -76,5 +76,35 @@
   // 馬場は jra-dify-pipeline のサービスバインディングで取る。
   "services": [
     { "binding": "BABA", "service": "jra-dify-pipeline" }
-  ]
+  ],
+  // プレビューは本番の設定を継承しない。このブロックが無いと
+  // Workers Builds の `npx wrangler preview` が失敗する。
+  // https://developers.cloudflare.com/workers/previews/configuration/
+  // KV と Queue は置かない。同じ id や jra-bashira-race を指すと本番に書く。
+  // consumer、cron、ルートは置かない。プレビューの scheduled は動かない。
+  // Notion のトークンは Secret なのでここには無く、プレビューには入らない。
+  "previews": {
+    "vars": {
+      "BASHIRA_MCP_URL": "https://mcp.bashira.omninode.co.jp/mcp",
+      "BABA_URL": "https://jra-dify-pipeline.hdsk.workers.dev/baba/latest",
+      // 本番のデータベース ID は置かない。トークンが後から入っても本番には書かない。
+      "NOTION_DATABASE_ID": "",
+      "STATS_PERIOD_YEARS": "5",
+      "STATS_MIN_STARTS": "30",
+      "STATS_BROODMARE_SIRE_MIN_STARTS": "50",
+      "DEFAULT_MODEL": "gemini-flash-latest",
+      "ACCESS_TEAM_DOMAIN": "https://hdsk.cloudflareaccess.com",
+      "ACCESS_CLIENT_ID_GROK": "",
+      "ACCESS_CLIENT_ID_MUSE": ""
+    },
+    // クラスと migrations はトップレベルのまま。プレビューごとに別の名前空間になる。
+    "durable_objects": {
+      "bindings": [{ "name": "BASHIRA_AUTH", "class_name": "BashiraAuth" }]
+    },
+    "version_metadata": { "binding": "CF_VERSION_METADATA" },
+    // 馬場の取得だけ、相手 Worker の本番を呼ぶ。この Worker の KV や Notion には書かない。
+    "services": [
+      { "binding": "BABA", "service": "jra-dify-pipeline" }
+    ]
+  }
 }
