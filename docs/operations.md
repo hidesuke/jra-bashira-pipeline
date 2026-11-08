@@ -32,7 +32,24 @@ SHA の環境変数が空で、上の条件を満たすときだけ `git rev-par
 
 Workers Builds は `wrangler.jsonc` の custom build を実行しません。ダッシュボードのビルドコマンド `npm ci && node scripts/write-build-info.mjs` が、CI 上でスクリプトを走らせます。`npm ci` の `prepare` も同じスクリプトを起動します。スクリプトが走らず tag も空なら、`commit` は null のままです。
 
-プルリクエストのプレビュー確認が失敗する理由は [known-issues.md](known-issues.md) です。
+## プルリクエストのプレビュー
+
+Workers Builds のプルリクエスト用プレビュー確認は通ります。設定は `wrangler.jsonc` の `previews` です。このブロックは本番の設定を継承しません。ブロックの説明は [Workers のプレビュー設定](https://developers.cloudflare.com/workers/previews/configuration/) にあります。
+
+`previews` にあるのは、非シークレットの `vars`、Durable Object `BASHIRA_AUTH` の binding、`CF_VERSION_METADATA`、サービスバインディング `BABA` です。
+
+プレビューに渡していないものは次です。
+
+- 本番の KV。`APP_KV` の binding は `previews` に無い。
+- 本番の Queue。`jra-bashira-race` の producer も consumer も `previews` に無い。
+- cron。`previews` に `triggers` は無い。プレビューの `scheduled` は動かない。
+- シークレット。`GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY`、`ACCESS_AUD` は `previews` に無い。
+
+`NOTION_DATABASE_ID` はプレビューでは空です。本番のデータベース ID は置きません。
+
+Durable Object のクラスと `migrations` はトップレベルにあります。プレビューの binding は、プレビューごとの名前空間です。
+
+`BABA` の `service` は `jra-dify-pipeline` です。プレビューはこの本番 Worker を読みます。この Worker の KV や Notion には書きません。
 
 ## リソース
 

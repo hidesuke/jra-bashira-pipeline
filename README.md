@@ -110,7 +110,7 @@ npx wrangler secret put ACCESS_AUD
 
 入れる名前は `GEMINI_API_KEY`、`NOTION_TOKEN`、`TOKEN_ENCRYPTION_KEY`、`ACCESS_AUD` です。レースを動かす前に 4 つが必要です。入っていないと実行時に失敗します。`secrets.required` は設定していません。Worker がまだ無い状態では、シークレットを先に置けないためです。
 
-`/health` の `commit` の決まり方は [docs/operations.md](docs/operations.md) にあります。プルリクエストのプレビュー用ビルドは、Wrangler に `previews` が無いため失敗します。これは既知の問題で、マージ後の本番ビルドとは別です。詳細は [docs/known-issues.md](docs/known-issues.md) です。
+`/health` の `commit` の決まり方と、プルリクエストのプレビューは [docs/operations.md](docs/operations.md) にあります。プレビュー確認は通ります。本番の KV、Queue、cron、シークレットはプレビューに渡しません。`BABA` は本番の `jra-dify-pipeline` を読みます。
 
 ## 主なエンドポイント
 
@@ -147,6 +147,6 @@ npx wrangler secret put ACCESS_AUD
 | [docs/admin.md](docs/admin.md) | 管理用エンドポイント |
 | [docs/notion.md](docs/notion.md) | Notion のプロパティ、ページの作り方、本文のブロック |
 | [docs/course-odds.md](docs/course-odds.md) | コース集計、馬場、単勝オッズ |
-| [docs/operations.md](docs/operations.md) | シークレット、ビルドの commit、テスト |
+| [docs/operations.md](docs/operations.md) | シークレット、ビルドの commit、プレビュー、テスト |
 | [docs/verification.md](docs/verification.md) | 以前の環境で確認できたことと、できていないこと |
 | [docs/known-issues.md](docs/known-issues.md) | 既知の問題 |
