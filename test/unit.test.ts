@@ -522,6 +522,7 @@ describe("dify v1 inputs", () => {
       remarks: "{{remarks}}",
       past_runs: "{{past_runs}}",
       course_records: "{{course_records}}",
+      runner_stats: "{{runner_stats}}",
       win_odds: "{{win_odds}}",
     });
     expect(RACE_USER_DIFY_TOKENS).toEqual({
@@ -561,6 +562,7 @@ describe("dify v1 inputs", () => {
       remarks: "なし",
       past_runs: "",
       course_records: "",
+      runner_stats: "",
       win_odds: "",
     });
     expect(filled).toBe("race_facts" in raceTokens ? ["レース情報", body].join("\n") : `レース情報\n\n${body}`);
@@ -585,6 +587,7 @@ describe("dify v1 inputs", () => {
       remarks: "なし",
       past_runs: "",
       course_records: "",
+      runner_stats: "",
       win_odds: "",
     });
     expect(filled).toBe("レース情報\n\n馬柱本文\n晴");
@@ -614,6 +617,7 @@ describe("dify v1 inputs", () => {
       remarks: "なし",
       past_runs: "",
       course_records: "",
+      runner_stats: "",
       win_odds: "",
     };
     const courseValues = { venue: "福島", surface: "芝", distance: "1600", course_summary: "要約本文" };

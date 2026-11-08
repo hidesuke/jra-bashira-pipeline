@@ -73,7 +73,7 @@ curl -sS "https://<worker>/admin/jobs/input?race_key=20261108-05-11" \
 
 `horses` の 1 件は、馬名、馬番、解決後の名前、`resolution_status`、近走数、生年月日、通算出走数、前走着順、前走距離、前走馬場、間隔、今回斤量、近走の配列です。状態の意味は [same-name-horses.md](same-name-horses.md) です。近走の 1 件はレース名、日付、公式着順、馬場、距離です。
 
-クエリを付けないときは `umabashira`（馬柱そのもの）と `race_input`（レース予想に渡したユーザー文）も返します。`include=umabashira` は馬柱だけ、`include=input` はユーザー文だけです。カンマで両方を指定できます。知らない名前は無視し、その本文は返しません。`horses` と `warnings` は `include` に関係なく返します。
+クエリを付けないときは `umabashira`（馬柱そのもの）と `race_input`（レース予想に渡したユーザー文）も返します。`include=umabashira` は馬柱だけ、`include=input` はユーザー文だけです。カンマで両方を指定できます。知らない名前は無視し、その本文は返しません。`horses` と `warnings` は `include` に関係なく返します。`{{runner_stats}}` はユーザー文の一部なので、`race_input` と `GET /admin/inspect` のレース予想ユーザー文で見ます。`include` の別項目にはしません。
 
 本文は KV `input:v1:{raceKey}` にあります。馬柱とユーザー文を JSON にした長さが 10 万文字を超えるときは、10 万文字ごとに `input:v1:{raceKey}:u:{n}` と `input:v1:{raceKey}:r:{n}` へ分けます。値の上限 25MiB より手前で、それぞれ 50 万文字を超える分は切り、末尾に切り詰めた旨を付けます。切ったときは `truncated` が true です。
 
@@ -176,7 +176,7 @@ curl -sS "https://<worker>/admin/inspect?date=2026-11-08" \
 | `umabashira` | LLM に渡した馬柱。未保存なら null |
 | `course.user_text` / `course.prompt_version` | コース分析のユーザー文とプロンプト版 |
 | `course.output_text` | コース分析の全文。Notion で切り詰める前 |
-| `race_prediction.user_text` / `race_prediction.prompt_version` | レース予想のユーザー文とプロンプト版。ユーザー文にはレース情報、近10走、コース成績が入る。`{{win_odds}}` はプロンプトに書いてあるときだけ |
+| `race_prediction.user_text` / `race_prediction.prompt_version` | レース予想のユーザー文とプロンプト版。ユーザー文にはレース情報、近10走、コース成績、出走馬のコース成績（父・母の父・騎手）が入る。`{{win_odds}}` はプロンプトに書いてあるときだけ |
 | `race_input_gaps` | その入力で空欄にした項目。予想の前は null |
 | `race_prediction.output_text` | レース予想のモデル出力全文 |
 | `race_prediction.予想本文` | 保存した予想本文。見出しから読んだあとの本文 |
