@@ -92,7 +92,7 @@ export interface JobState {
    */
   raceInputGaps?: string[];
   /**
-   * generateContent ごとの finishReason、modelVersion、usageMetadata。
+   * streamGenerateContent ごとの finishReason、modelVersion、usageMetadata。
    * コース分析だけ検索クエリも入る。本文と引用は入れない。
    */
   gemini?: {

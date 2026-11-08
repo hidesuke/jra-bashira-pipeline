@@ -1,6 +1,6 @@
 {
   "name": "jra-bashira-predict",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "description": "1レースずつ BASHIRA で一次予想を作り、Notion に書く Cloudflare Worker",

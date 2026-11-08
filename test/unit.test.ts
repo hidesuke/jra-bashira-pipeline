@@ -796,6 +796,11 @@ describe("dify v1 inputs", () => {
   });
 });
 
+function geminiSse(events: unknown[]): Response {
+  const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+  return new Response(body, { headers: { "content-type": "text/event-stream" } });
+}
+
 describe("gemini json", () => {
   it("reads a fenced race prediction", () => {
     expect(parseRacePrediction('```json\n{"指数分布":"1強","自信度":"A","波乱度":"堅実","印":"◎1","予想本文":"行く"}\n```')).toMatchObject({
@@ -812,35 +817,41 @@ describe("gemini json", () => {
       prompt: "user",
       budget: new ExternalBudget(),
       tools: [{ googleSearch: {} }],
-      fetcher: async (_input, init) => {
+      fetcher: async (input, init) => {
         seen.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        return Response.json({
-          modelVersion: "gemini-3.8-flash-001",
-          usageMetadata: {
-            promptTokenCount: 11,
-            candidatesTokenCount: 22,
-            thoughtsTokenCount: 33,
-            totalTokenCount: 66,
-            cachedContentTokenCount: 9,
-          },
-          candidates: [
-            {
-              finishReason: "STOP",
-              groundingMetadata: {
-                webSearchQueries: ["東京 芝 1600", 3, "福島"],
-                groundingChunks: [{ web: { title: "cite-me" } }],
-              },
-              content: {
-                parts: [
-                  { text: "考えたことSECRET", thought: true },
-                  { text: "本文です" },
-                  { thought: true },
-                  { text: "続き" },
-                ],
-              },
+        expect(String(input)).toBe(
+          "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?alt=sse",
+        );
+        expect(new Headers(init?.headers).get("x-goog-api-key")).toBe("k");
+        return geminiSse([
+          {
+            modelVersion: "gemini-3.8-flash-001",
+            usageMetadata: {
+              promptTokenCount: 11,
+              candidatesTokenCount: 22,
+              thoughtsTokenCount: 33,
+              totalTokenCount: 66,
+              cachedContentTokenCount: 9,
             },
-          ],
-        });
+            candidates: [
+              {
+                finishReason: "STOP",
+                groundingMetadata: {
+                  webSearchQueries: ["東京 芝 1600", 3, "福島"],
+                  groundingChunks: [{ web: { title: "cite-me" } }],
+                },
+                content: {
+                  parts: [
+                    { text: "考えたことSECRET", thought: true },
+                    { text: "本文です" },
+                    { thought: true },
+                    { text: "続き" },
+                  ],
+                },
+              },
+            ],
+          },
+        ]);
       },
     });
     expect(seen[0]?.tools).toEqual([{ googleSearch: {} }]);
@@ -876,9 +887,9 @@ describe("gemini json", () => {
       budget: new ExternalBudget(),
       fetcher: async (_input, init) => {
         body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        return Response.json({
-          candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [{ text: "本文" }] } }],
-        });
+        return geminiSse([
+          { candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [{ text: "本文" }] } }] },
+        ]);
       },
     });
     expect(body.tools).toBeUndefined();
@@ -902,9 +913,9 @@ describe("gemini json", () => {
         prompt: "user",
         budget: new ExternalBudget(),
         fetcher: async () =>
-          Response.json({
-            candidates: [{ content: { parts: [{ text: "考えただけ", thought: true }] } }],
-          }),
+          geminiSse([
+            { candidates: [{ content: { parts: [{ text: "考えただけ", thought: true }] } }] },
+          ]),
       }),
     ).rejects.toThrow(/応答テキストが空です/);
   });
@@ -922,9 +933,9 @@ describe("gemini json", () => {
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
         bodies.push(body);
         if (bodies.length === 1) return Response.json({ error: { message: "bad schema" } }, { status: 400 });
-        return Response.json({
-          candidates: [{ finishReason: "STOP", content: { parts: [{ text: "{\"指数分布\":\"x\"}" }] } }],
-        });
+        return geminiSse([
+          { candidates: [{ finishReason: "STOP", content: { parts: [{ text: "{\"指数分布\":\"x\"}" }] } }] },
+        ]);
       },
     });
     expect(bodies).toHaveLength(2);
