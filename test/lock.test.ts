@@ -42,6 +42,7 @@ function setup(kind: "auth" | "upstream") {
       statsPeriodYears: 5,
       statsMinStarts: 30,
       broodmareMinStarts: 50,
+      courseSummaryMinCount: 30,
       defaultModel: "gemini-flash-latest",
       accessTeamDomain: "https://hdsk.cloudflareaccess.com",
       accessAud: "aud-tag",

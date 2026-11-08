@@ -26,6 +26,7 @@ const config = {
   statsPeriodYears: 5,
   statsMinStarts: 30,
   broodmareMinStarts: 50,
+  courseSummaryMinCount: 30,
   defaultModel: "gemini-flash-latest",
 };
 
@@ -50,6 +51,8 @@ function harness(options?: {
   failArchiveOnce?: boolean;
   externalBudget?: number;
   raceText?: string;
+  summaryError?: boolean;
+  courseSummaryMinCount?: number;
   onEntries?: (args: Record<string, unknown>) => { ok: true; data: unknown } | null;
 }) {
   const kv = new MemoryKv();
@@ -76,6 +79,18 @@ function harness(options?: {
     },
     async callTool(name, args) {
       if (name === "get_races") {
+        const filters = (args.filters ?? {}) as { race_status?: string };
+        if (filters.race_status === "finished") {
+          return {
+            ok: true,
+            data: {
+              columns: ["race_id", "race_status"],
+              rows: Array.from({ length: 40 }, (_, index) => [`race-${index}`, "finished"]),
+              row_count: 40,
+              truncated: false,
+            },
+          };
+        }
         return {
           ok: true,
           data: {
@@ -171,9 +186,17 @@ function harness(options?: {
     },
     async callTools(calls) {
       statBatches.push(calls.length);
+      const summary = calls.some((call) => JSON.stringify(call.args).includes("race_meeting_date"));
+      if (summary && options?.summaryError) {
+        return { ok: false, code: "upstream", retryable: true, message: "course summary down", results: [] };
+      }
       return {
         ok: true,
-        results: calls.map(() => ({ columns: ["starts", "wins"], rows: [[40, 8]] })),
+        results: calls.map((call) =>
+          JSON.stringify(call.args).includes("race_meeting_date")
+            ? courseSummaryPayload(call.args)
+            : { columns: ["starts", "wins"], rows: [[40, 8]] },
+        ),
       };
     },
   };
@@ -284,7 +307,7 @@ function harness(options?: {
 
   const deps: PipelineDeps = {
     kv,
-    config,
+    config: { ...config, courseSummaryMinCount: options?.courseSummaryMinCount ?? config.courseSummaryMinCount },
     bashira,
     now: () => new Date("2026-11-07T06:00:00Z"),
     fetch: fetchImpl,
@@ -310,6 +333,47 @@ function raceUser(style: PromptStyle): string {
   return [tokens.umabashira, tokens.course_analysis, tokens.weather, tokens.condition, tokens.remarks].join("\n");
 }
 
+function courseSummaryPayload(args: Record<string, unknown>): unknown {
+  const filters = (args.filters ?? {}) as Record<string, unknown>;
+  const dimensions = args.dimensions as string[] | undefined;
+  if (dimensions?.[0] === "bracket_number") {
+    return {
+      columns: ["bracket_number", "starts", "wins", "top3"],
+      rows: [
+        [1, 10, 2, 4],
+        [2, 10, 1, 3],
+        [3, 10, 1, 3],
+        [4, 10, 1, 2],
+        [5, 12, 2, 4],
+        [6, 12, 1, 3],
+        [7, 12, 1, 3],
+        [8, 12, 1, 2],
+      ],
+    };
+  }
+  if (dimensions?.[0] === "track_condition") {
+    return {
+      columns: ["track_condition", "wins", "front_wins"],
+      rows: [
+        ["良", 40, 30],
+        ["稍重", 10, 8],
+        ["重", 4, 3],
+        ["不良", 2, 2],
+      ],
+    };
+  }
+  if (filters.is_fastest_last_3f === true) return { columns: ["starts", "wins"], rows: [[40, 12]] };
+  const corner = filters.fourth_corner_position;
+  if (corner === 1) return { columns: ["starts", "wins", "top3"], rows: [[20, 10, 18]] };
+  if (corner && typeof corner === "object") {
+    const range = corner as { gte?: number };
+    if (range.gte === 2) return { columns: ["starts", "wins", "top3"], rows: [[30, 20, 40]] };
+    if (range.gte === 5) return { columns: ["starts", "wins", "top3"], rows: [[40, 12, 30]] };
+    if (range.gte === 10) return { columns: ["starts", "wins", "top3"], rows: [[20, 6, 12]] };
+  }
+  return { columns: ["starts", "wins", "top3"], rows: [[200, 48, 100]], data_through: "2026-11-03" };
+}
+
 async function seedPrompts(kv: MemoryKv, style: PromptStyle = "placeholder"): Promise<void> {
   await kv.put(keys.prompt("course"), JSON.stringify({ version: "v1", system: "コースシステム", user: courseUser(style) }));
   await kv.put(keys.prompt("race"), JSON.stringify({ version: "v1", system: "予測システム", user: raceUser(style) }));
@@ -322,7 +386,7 @@ describe("pipeline", () => {
     const start: JobMessage = { kind: "start", runId: "run-1", race, requestedBy: "Grok Bot" };
     const results = await drain(env, start);
     expect(results.every((result) => result === "ack")).toBe(true);
-    expect(env.statBatches).toEqual([8, 1]);
+    expect(env.statBatches).toEqual([8, 1, 8]);
     expect(env.geminiBodies).toHaveLength(2);
     const courseBody = env.geminiBodies[0] as {
       systemInstruction?: { parts?: Array<{ text?: string }> };
@@ -336,6 +400,7 @@ describe("pipeline", () => {
     expect(courseUser).not.toContain("{{");
     expect(courseUser).not.toContain("クッション値");
     expect(courseUser).not.toContain("min_starts");
+    expect(courseUser).not.toContain("コースデータ要約");
     const raceBody = env.geminiBodies[1] as {
       systemInstruction?: { parts?: Array<{ text?: string }> };
       generationConfig?: unknown;
@@ -379,6 +444,13 @@ describe("pipeline", () => {
     expect(bodyText).toContain("オッズ種別: 最終");
     expect(bodyText).toContain("2026-11-07T15:04:00+09:00");
     expect(bodyText).toContain("course_variant: null");
+    expect(bodyText).not.toContain("コースデータ要約");
+    const stored = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as {
+      courseSummary?: { status?: string; raceCount?: number; text?: string };
+    };
+    expect(stored.courseSummary?.status).toBe("ok");
+    expect(stored.courseSummary?.raceCount).toBe(40);
+    expect(stored.courseSummary?.text).toContain("脚質（4角の位置）");
     await expect(env.kv.get(keys.notionPage(race.raceKey))).resolves.toBe("page-1");
     expect(env.notionCalls.some((call) => call.method === "DELETE")).toBe(false);
 
@@ -422,6 +494,58 @@ describe("pipeline", () => {
     expect(texts[1]).toContain("重");
     expect(texts[1]).toContain("クッション値9.2");
     expect(texts[1]).not.toContain("{{");
+  });
+
+  it("passes the course summary into the course prompt and keeps going when the summary fails", async () => {
+    const env = harness();
+    await seedPrompts(env.kv);
+    await env.kv.put(
+      keys.prompt("course"),
+      JSON.stringify({
+        version: "v1",
+        system: "コースシステム",
+        user: `${COURSE_USER_PLACEHOLDERS.venue}\n${COURSE_USER_PLACEHOLDERS.course_summary}`,
+      }),
+    );
+    await drain(env, { kind: "start", runId: "run-summary", race, requestedBy: "Grok Bot" });
+    const courseText =
+      (env.geminiBodies[0]?.contents as Array<{ parts?: Array<{ text?: string }> }> | undefined)?.[0]?.parts?.[0]?.text ?? "";
+    expect(courseText).toContain("福島");
+    expect(courseText).toContain("先頭: 10頭（20.8%）");
+    expect(courseText).toContain("重・不良");
+    expect(courseText).toContain("開催が少ないため参考値");
+    expect(courseText).not.toContain("{{");
+    expect(courseText).not.toContain("win_payout");
+    const raceText =
+      (env.geminiBodies[1]?.contents as Array<{ parts?: Array<{ text?: string }> }> | undefined)?.[0]?.parts?.[0]?.text ?? "";
+    expect(raceText).not.toContain("脚質（4角の位置）");
+    const page = env.notionCalls.find((call) => call.method === "POST" && call.path === "/v1/pages");
+    expect(JSON.stringify(page?.body)).not.toContain("コースデータ要約");
+
+    const failed = harness({ summaryError: true });
+    await seedPrompts(failed.kv);
+    await failed.kv.put(
+      keys.prompt("course"),
+      JSON.stringify({
+        version: "v1",
+        system: "コースシステム",
+        user: `${COURSE_USER_PLACEHOLDERS.course_summary}`,
+      }),
+    );
+    const results = await drain(failed, { kind: "start", runId: "run-summary-fail", race, requestedBy: "Grok Bot" });
+    expect(results.every((result) => result === "ack")).toBe(true);
+    expect(failed.geminiBodies).toHaveLength(2);
+    const failedCourse =
+      (failed.geminiBodies[0]?.contents as Array<{ parts?: Array<{ text?: string }> }> | undefined)?.[0]?.parts?.[0]?.text ?? "";
+    expect(failedCourse).toBe("コースデータ要約はありません（集計に失敗しました）。");
+    const job = JSON.parse((await failed.kv.get(keys.job(race.raceKey))) ?? "{}") as {
+      phase?: string;
+      courseSummary?: { status?: string; error?: string; text?: string | null };
+    };
+    expect(job.phase).toBe("done");
+    expect(job.courseSummary?.status).toBe("failed");
+    expect(job.courseSummary?.text).toBeNull();
+    expect(job.courseSummary?.error).toContain("course summary down");
   });
 
   it("stops when BASHIRA refresh fails and does not call Gemini", async () => {
