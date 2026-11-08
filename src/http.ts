@@ -3,6 +3,7 @@ import type { ConsistencyWarning } from "./consistency";
 import { horseFormSnapshots, type HorseFormSnapshot } from "./form";
 import type { CourseGeminiCall, GeminiCallRecord, GeminiUsageMetadata } from "./gemini";
 import { handleInspect } from "./inspect";
+import { pastRunsSnapshotFields } from "./input-sections";
 import { jobRetryView, loadJob } from "./job";
 import { keys } from "./kv";
 import { loadPredictInput } from "./predict-input";
@@ -299,6 +300,7 @@ async function getJobInput(url: URL, deps: HttpDeps): Promise<Response> {
   };
   if (include.has("umabashira")) body.umabashira = stored?.umabashira ?? null;
   if (include.has("input")) body.race_input = stored?.raceInput ?? null;
+  if (include.has("past_runs")) Object.assign(body, pastRunsSnapshotFields(stored));
   return json(body);
 }
 

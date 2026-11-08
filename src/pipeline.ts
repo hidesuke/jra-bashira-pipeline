@@ -28,8 +28,8 @@ import { saveLlmTrace } from "./llm-trace";
 import { loadPrompt } from "./prompts";
 import { numberField, rowsToObjects, stringField } from "./rows";
 import { ambiguousNameMessage } from "./bashira/mcp";
-import { savePredictInput } from "./predict-input";
-import { careerHorses, loadPastPerformance, renderCourseRecords, renderPastRuns, type CareerHorse } from "./past-runs";
+import { savePredictInput, type StoredRelatedCourses } from "./predict-input";
+import { careerHorses, loadPastPerformance, renderCourseRecords, renderPastRuns, renderRelatedCoursesLine, type CareerHorse } from "./past-runs";
 import { buildRaceFacts } from "./race-facts";
 import { relatedCoursesGap, stripRelatedCourses } from "./related-courses";
 import { horseFactGaps, renderUmabashira } from "./umabashira";
@@ -567,12 +567,22 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       course_records: courseRecords,
       win_odds: renderWinOddsText(state.entries, state.odds),
     });
+    const relatedCourses: StoredRelatedCourses = {
+      status: strippedCourse.parse.status,
+      courses: strippedCourse.parse.status === "ok" ? strippedCourse.parse.courses : [],
+      dropped: strippedCourse.parse.dropped,
+      line: renderRelatedCoursesLine(related),
+    };
     const stored = await savePredictInput(deps.kv, {
       raceKey: state.race.raceKey,
       runId: state.runId,
       umabashira,
       raceInput,
       horses: snapshots,
+      savedAt: deps.now().toISOString(),
+      pastRuns,
+      courseRecords,
+      relatedCourses,
     });
     state.predictInput = { stored: true, ...stored };
     const race = await generateText({

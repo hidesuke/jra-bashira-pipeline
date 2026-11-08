@@ -713,6 +713,22 @@ describe("pipeline", () => {
     expect(raceUser).toContain("関連コース: (1,1,0,0,0,0)");
     expect(raceUser).toContain("| 4 | 6.5 | 34.5 | 35.6 |");
     expect(raceUser).not.toContain("# 単勝オッズ");
+    const storedInput = await loadPredictInput(env.kv, race.raceKey);
+    expect(storedInput?.savedAt).toBe("2026-11-07T06:00:00.000Z");
+    expect(storedInput?.pastRuns && raceUser.includes(storedInput.pastRuns)).toBe(true);
+    expect(storedInput?.courseRecords && raceUser.includes(storedInput.courseRecords)).toBe(true);
+    expect(storedInput?.pastRuns).not.toContain("予測システム");
+    expect(storedInput?.pastRuns).not.toContain("<<<");
+    expect(storedInput?.courseRecords).not.toContain("<<<");
+    expect(storedInput?.relatedCourses).toEqual({
+      status: "ok",
+      courses: [
+        { track: "東京", surface: "芝", distance: 1600 },
+        { track: "福島", surface: "芝", distance: 1600 },
+      ],
+      dropped: 0,
+      line: "関連コース: 東京,芝,1600 / 福島,芝,1600",
+    });
     const trace = await loadLlmTrace(env.kv, race.raceKey);
     expect(trace?.courseOutput).toContain("<<<related-courses>>>");
     const job = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
