@@ -139,6 +139,7 @@ export function buildInspectView(
     },
     course_summary: summary.text,
     course_summary_error: summary.error,
+    race_input_gaps: state.raceInputGaps ?? null,
     warnings: (state.consistencyWarnings ?? []).map(warningView),
   };
 }
@@ -222,6 +223,10 @@ export function renderInspectMarkdown(view: InspectView): string {
     "### プロンプト版",
     "",
     textBlock(view.race_prediction.prompt_version),
+    "",
+    "### 空欄にした項目",
+    "",
+    gapsMarkdown(view.race_input_gaps),
     "",
     "### ユーザー文",
     "",
@@ -487,6 +492,12 @@ function bullet(label: string, value: unknown): string {
   return `- ${label}: ${String(value)}`;
 }
 
+function gapsMarkdown(gaps: string[] | null): string {
+  if (gaps == null) return "（予想の前のため記録がありません）";
+  if (gaps.length === 0) return "（なし）";
+  return gaps.map((gap) => `- ${gap}`).join("\n");
+}
+
 function textBlock(value: string | null): string {
   if (value == null) return "（保存されていません）";
   if (value === "") return "（空）";
@@ -597,6 +608,8 @@ export interface InspectView {
   };
   course_summary: string | null;
   course_summary_error: string | null;
+  /** 予想の前は null。予想まで進んだジョブは空欄にした項目の配列。 */
+  race_input_gaps: string[] | null;
   warnings: Array<Record<string, unknown>>;
 }
 

@@ -104,9 +104,15 @@ function harness(options?: {
                 distance: 1600,
                 race_name_main: "テストS",
                 grade: "G2",
+                race_condition: "オープン",
+                race_type: "3歳以上",
+                starters: 1,
+                scheduled_horse_count: 2,
                 race_track: "福島",
                 race_number: 11,
                 rail_type: "A",
+                weight_type: "定量",
+                post_time: "15:30:00",
                 weather: "曇",
                 track_condition: "重",
               },
@@ -165,13 +171,25 @@ function harness(options?: {
           ok: true,
           data: {
             rows: [
-              { horse_number: 1, horse_name: "ア", jockey_name: "騎手A", sire_name: "父一", broodmare_sire_name: "母父一" },
+              {
+                horse_number: 1,
+                horse_name: "ア",
+                jockey_name: "騎手A",
+                sire_name: "父一",
+                broodmare_sire_name: "母父一",
+                trainer_name: "調教師A",
+                trainer_east_west: "東",
+                horse_weight: 480,
+                horse_weight_difference_with_previous_race: 4,
+              },
               {
                 horse_number: 2,
                 horse_name: "イ",
                 jockey_name: "騎手B",
                 sire_name: "父二",
                 broodmare_sire_name: "母父二",
+                trainer_name: "調教師B",
+                trainer_east_west: "西",
                 race_abnormality: "出走取消",
               },
             ],
@@ -451,6 +469,21 @@ describe("pipeline", () => {
     expect(raceUser).not.toContain("COURSE_THOUGHT");
     expect(raceUser).not.toContain("COURSE_CITATION");
     expect(raceUser).not.toContain("福島 芝 1600 コース");
+    expect(raceUser).toContain("レース名: テストS");
+    expect(raceUser).toContain("グレード: G2");
+    expect(raceUser).toContain("クラス: オープン");
+    expect(raceUser).toContain("競走種別: 3歳以上");
+    expect(raceUser).toContain("頭数: 予定2 / 出走1（取消・除外を反映）");
+    expect(raceUser).toContain("コース: Aコース");
+    expect(raceUser).toContain("内外回り: ");
+    expect(raceUser).toContain("仮柵: ");
+    expect(raceUser).toContain("斤量種別: 定量");
+    expect(raceUser).toContain("発走時刻: 15:30");
+    expect(raceUser).toContain("調教師 調教師A（美浦）");
+    expect(raceUser).toContain("馬体重 480kg（+4）");
+    expect(raceUser).toContain("調教師 調教師B（栗東）");
+    expect(raceUser).toContain("馬体重 —");
+    expect(raceUser).not.toMatch(/オッズ/);
     expect(raceUser).toContain("# 馬柱");
     expect(raceUser).toContain("2026-10-12");
     expect(raceUser).toContain("通過3-3-2-2");
@@ -494,6 +527,10 @@ describe("pipeline", () => {
     expect(bodyText).not.toContain("福島 芝 1600 コース");
     expect(bodyText).not.toContain("レースでは検索しない");
     const job = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(env.entryCalls[0]?.columns).toEqual(
+      expect.arrayContaining(["trainer_name", "trainer_east_west", "horse_weight", "horse_weight_difference_with_previous_race"]),
+    );
+    expect(job.raceInputGaps).toEqual(["内外回り（BASHIRA に項目が無い）", "仮柵（BASHIRA に項目が無い）", "2 イの馬体重"]);
     expect(job.courseSummary?.status).toBe("ok");
     expect(job.courseSummary?.raceCount).toBe(40);
     expect(job.courseSummary?.text).toContain("脚質（4角の位置）");

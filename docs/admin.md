@@ -46,6 +46,8 @@ curl -sS "https://<worker>/admin/jobs?race_key=20261107-03-11" \
 
 `ticket_count_corrections` は、買い目の点数を差し替えた記録です。差し替えが無いときは空配列です。1 件は `tickets`（券種）、`declared`（見出しの点数）、`counted`（列から数えた点数）です。見方は [pipeline.md](pipeline.md) です。
 
+`race_input_gaps` は、レース予想の入力で空欄にした項目です。予想の前は null です。予想まで進むと配列になり、内外回りと仮柵は項目が無いので毎回入ります。ほかに空欄が無ければこの 2 件だけです。見方は [prompts.md](prompts.md) です。
+
 ## 予想に渡した入力
 
 ```bash
@@ -174,7 +176,8 @@ curl -sS "https://<worker>/admin/inspect?date=2026-11-08" \
 | `umabashira` | LLM に渡した馬柱。未保存なら null |
 | `course.user_text` / `course.prompt_version` | コース分析のユーザー文とプロンプト版 |
 | `course.output_text` | コース分析の全文。Notion で切り詰める前 |
-| `race_prediction.user_text` / `race_prediction.prompt_version` | レース予想のユーザー文とプロンプト版 |
+| `race_prediction.user_text` / `race_prediction.prompt_version` | レース予想のユーザー文とプロンプト版。ユーザー文にはレース情報が入る |
+| `race_input_gaps` | その入力で空欄にした項目。予想の前は null |
 | `race_prediction.output_text` | レース予想のモデル出力全文 |
 | `race_prediction.予想本文` | 保存した予想本文。見出しから読んだあとの本文 |
 | `finishReason` / `modelVersion` / `usageMetadata` | 呼び出しごと |

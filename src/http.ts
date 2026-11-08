@@ -266,6 +266,7 @@ async function getJob(url: URL, deps: HttpDeps): Promise<Response> {
       declared: item.declared,
       counted: item.counted,
     })),
+    race_input_gaps: state.raceInputGaps ?? null,
   });
 }
 

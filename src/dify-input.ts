@@ -3,12 +3,22 @@ import { numberField, stringField } from "./rows";
 
 /** レース予想ユーザー文の差し込み。KV はこちらの名前を使う。 */
 export const RACE_USER_PLACEHOLDERS = {
+  race_facts: "{{race_facts}}",
   umabashira: "{{umabashira}}",
   course_analysis: "{{course_analysis}}",
   weather: "{{weather}}",
   condition: "{{condition}}",
   remarks: "{{remarks}}",
 } as const;
+
+export type RaceUserValues = {
+  race_facts: string;
+  umabashira: string;
+  course_analysis: string;
+  weather: string;
+  condition: string;
+  remarks: string;
+};
 
 /**
  * 移行期間の Dify ノード ID。KV を上の名前へ替えるまで、同じ値で置換する。
@@ -22,17 +32,15 @@ export const RACE_USER_DIFY_TOKENS = {
   remarks: "{{#1787386477043.remarks#}}",
 } as const;
 
-export function fillRaceUser(
-  template: string,
-  values: { umabashira: string; course_analysis: string; weather: string; condition: string; remarks: string },
-): string {
-  return fillPlaceholders(
-    template,
-    RACE_USER_PLACEHOLDERS,
-    RACE_USER_DIFY_TOKENS,
-    values,
-    "レース予想のユーザー文に未置換の差し込み（{{）が残っています",
-  );
+export function fillRaceUser(template: string, values: RaceUserValues): string {
+  const message = "レース予想のユーザー文に未置換の差し込み（{{）が残っています";
+  const filled = fillPlaceholders(template, RACE_USER_PLACEHOLDERS, RACE_USER_DIFY_TOKENS, values, message);
+  if (template.includes(RACE_USER_PLACEHOLDERS.race_facts)) return filled;
+  const block = values.race_facts.trim();
+  if (!block) return filled;
+  const text = `${block}\n\n${filled}`;
+  if (text.includes("{{")) throw new JobError(message, false);
+  return text;
 }
 
 /** コース特徴ユーザー文。競馬場・芝/ダート/障害・距離と、コードで計算したコースデータ要約。 */

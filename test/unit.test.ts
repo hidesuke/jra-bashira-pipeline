@@ -20,7 +20,7 @@ import { generateText, parseRacePrediction } from "../src/gemini";
 import { formatJst } from "../src/jst";
 import { keys, MemoryKv } from "../src/kv";
 import { loadPrompt } from "../src/prompts";
-import { formatPastRun, renderUmabashira } from "../src/umabashira";
+import { formatPastRun, horseFactGaps, renderUmabashira } from "../src/umabashira";
 import { applyModelUpdate, assertModelsAllowed, generateContentModels, restoreModelUpdate } from "../src/models";
 import { ambiguousNameMessage, parseMcpHttpBody, unwrapToolResult } from "../src/bashira/mcp";
 import { applyTokenResponse, buildAuthorizeUrl, createPkce, discoverOAuth } from "../src/bashira/oauth";
@@ -30,7 +30,7 @@ import { blocksIncludeBashira, decideNotionTarget } from "../src/notion";
 import { interpretOdds } from "../src/odds";
 import { parseRaceRequest } from "../src/race-ref";
 import { rowsToObjects } from "../src/rows";
-import { assertToolArgs, catalogFromTools } from "../src/schema";
+import { assertToolArgs, catalogFromTools, selectColumns } from "../src/schema";
 import { CORNER_RANGES, buildStatTasks, yearFrom } from "../src/stats";
 import { JobError } from "../src/types";
 import { bashiraTools } from "./fixture";
@@ -188,6 +188,17 @@ describe("stats tasks", () => {
 describe("schema", () => {
   it("rejects arguments that are not in tools/list", () => {
     expect(() => assertToolArgs(catalog, "get_odds", { race_id: "20261107-03-11", bet_type: "win", extra: 1 })).toThrow(/extra/);
+  });
+
+  it("drops optional columns that the live schema does not list", () => {
+    expect(selectColumns(catalog, "get_entries", ["horse_name"], ["trainer_east_west", "not_a_column"])).toEqual([
+      "horse_name",
+      "trainer_east_west",
+    ]);
+    const narrow = catalogFromTools([
+      { name: "get_entries", inputSchema: { properties: { columns: { items: { enum: ["horse_name"] } } } } },
+    ]);
+    expect(selectColumns(narrow, "get_entries", ["horse_name"], ["trainer_east_west"])).toEqual(["horse_name"]);
   });
 });
 
@@ -503,6 +514,7 @@ describe("dify v1 inputs", () => {
 
   it("names the user slots and keeps the old Dify node ids", () => {
     expect(RACE_USER_PLACEHOLDERS).toEqual({
+      race_facts: "{{race_facts}}",
       umabashira: "{{umabashira}}",
       course_analysis: "{{course_analysis}}",
       weather: "{{weather}}",
@@ -533,17 +545,19 @@ describe("dify v1 inputs", () => {
     ["placeholders", RACE_USER_PLACEHOLDERS, COURSE_USER_PLACEHOLDERS],
     ["Dify tokens", RACE_USER_DIFY_TOKENS, COURSE_USER_DIFY_TOKENS],
   ] as const)("fills %s in the user text", (_label, raceTokens, courseTokens) => {
-    const filled = fillRaceUser(
-      [raceTokens.umabashira, raceTokens.course_analysis, raceTokens.weather, raceTokens.condition, raceTokens.remarks].join("\n"),
-      {
-        umabashira: "馬柱本文",
-        course_analysis: "コース本文",
-        weather: "晴",
-        condition: "良",
-        remarks: "なし",
-      },
-    );
-    expect(filled).toBe(["馬柱本文", "コース本文", "晴", "良", "なし"].join("\n"));
+    const body = ["馬柱本文", "コース本文", "晴", "良", "なし"].join("\n");
+    const parts: string[] = [raceTokens.umabashira, raceTokens.course_analysis, raceTokens.weather, raceTokens.condition, raceTokens.remarks];
+    if ("race_facts" in raceTokens) parts.unshift(raceTokens.race_facts);
+    const template = parts.join("\n");
+    const filled = fillRaceUser(template, {
+      race_facts: "レース情報",
+      umabashira: "馬柱本文",
+      course_analysis: "コース本文",
+      weather: "晴",
+      condition: "良",
+      remarks: "なし",
+    });
+    expect(filled).toBe("race_facts" in raceTokens ? ["レース情報", body].join("\n") : `レース情報\n\n${body}`);
     expect(filled).not.toContain("{{");
     const course = fillCourseUser([courseTokens.venue, courseTokens.surface, courseTokens.distance].join("\n"), {
       venue: "福島",
@@ -557,13 +571,14 @@ describe("dify v1 inputs", () => {
 
   it("fills a mix of new placeholders and old Dify tokens", () => {
     const filled = fillRaceUser(`${RACE_USER_PLACEHOLDERS.umabashira}\n${RACE_USER_DIFY_TOKENS.weather}`, {
+      race_facts: "レース情報",
       umabashira: "馬柱本文",
       course_analysis: "コース本文",
       weather: "晴",
       condition: "良",
       remarks: "なし",
     });
-    expect(filled).toBe("馬柱本文\n晴");
+    expect(filled).toBe("レース情報\n\n馬柱本文\n晴");
     const course = fillCourseUser(`${COURSE_USER_DIFY_TOKENS.venue} ${COURSE_USER_PLACEHOLDERS.distance}`, {
       venue: "福島",
       surface: "芝",
@@ -582,6 +597,7 @@ describe("dify v1 inputs", () => {
 
   it("rejects a leftover {{# or {{name}} placeholder", () => {
     const raceValues = {
+      race_facts: "レース情報",
       umabashira: "馬柱本文",
       course_analysis: "コース本文",
       weather: "晴",
@@ -718,7 +734,29 @@ describe("dify v1 inputs", () => {
     });
     expect(page).toContain("馬身");
     expect(page).toContain("出走取消");
+    expect(page).toContain("調教師 —");
+    expect(page).toContain("馬体重 —");
     expect(page).not.toContain("min_starts");
+    const card = renderUmabashira({
+      race,
+      entries: [
+        {
+          horse_number: 7,
+          horse_name: "ファイアンクランツ",
+          trainer_name: "堀　宣行",
+          trainer_east_west: "東",
+          horse_weight: 480,
+          horse_weight_difference_with_previous_race: 4,
+        },
+      ],
+      formTasks: [],
+    });
+    expect(card).toContain("調教師 堀　宣行（美浦）");
+    expect(card).toContain("馬体重 480kg（+4）");
+    expect(horseFactGaps([{ horse_number: 2, horse_name: "イ", trainer_name: "調教師B" }])).toEqual([
+      "2 イの調教師の所属",
+      "2 イの馬体重",
+    ]);
   });
 
   it("reads the Dify markdown headings and rejects the old prompt shape", async () => {

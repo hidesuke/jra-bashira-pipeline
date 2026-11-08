@@ -1,0 +1,35 @@
+{
+  "race_key": "20261108-05-11",
+  "note": "2026-11-08 東京11R。get_races と get_entries で取った列だけ。オッズは入れていない。",
+  "race": {
+    "race_name_main": "アルゼンチン共和国杯",
+    "grade": "G2",
+    "race_condition": "オープン",
+    "race_type": "3歳以上",
+    "starters": 18,
+    "scheduled_horse_count": 18,
+    "rail_type": "B",
+    "weight_type": "ハンデ",
+    "post_time": "15:30:00"
+  },
+  "entries": [
+    { "horse_number": 1, "horse_name": "ジーティーダーリン", "trainer_name": "田中　克典", "trainer_east_west": "西", "horse_weight": 506, "horse_weight_difference_with_previous_race": -10 },
+    { "horse_number": 2, "horse_name": "ビザンチンドリーム", "trainer_name": "坂口　智康", "trainer_east_west": "西", "horse_weight": 460, "horse_weight_difference_with_previous_race": -6 },
+    { "horse_number": 3, "horse_name": "マイネルエンペラー", "trainer_name": "清水　久詞", "trainer_east_west": "西", "horse_weight": 490, "horse_weight_difference_with_previous_race": 2 },
+    { "horse_number": 4, "horse_name": "ミラージュナイト", "trainer_name": "杉山　佳明", "trainer_east_west": "西", "horse_weight": 496, "horse_weight_difference_with_previous_race": 6 },
+    { "horse_number": 5, "horse_name": "ドゥラドーレス", "trainer_name": "宮田　敬介", "trainer_east_west": "東", "horse_weight": 494, "horse_weight_difference_with_previous_race": -6 },
+    { "horse_number": 6, "horse_name": "ファミリータイム", "trainer_name": "石坂　公一", "trainer_east_west": "西", "horse_weight": 478, "horse_weight_difference_with_previous_race": -6 },
+    { "horse_number": 7, "horse_name": "ファイアンクランツ", "trainer_name": "堀　宣行", "trainer_east_west": "東", "horse_weight": 480, "horse_weight_difference_with_previous_race": 4 },
+    { "horse_number": 8, "horse_name": "ジョイボーイ", "trainer_name": "四位　洋文", "trainer_east_west": "西", "horse_weight": 490, "horse_weight_difference_with_previous_race": 2 },
+    { "horse_number": 9, "horse_name": "レッドバンデ", "trainer_name": "大竹　正博", "trainer_east_west": "東", "horse_weight": 498, "horse_weight_difference_with_previous_race": 2 },
+    { "horse_number": 10, "horse_name": "ボーンディスウェイ", "trainer_name": "牧　光二", "trainer_east_west": "東", "horse_weight": 496, "horse_weight_difference_with_previous_race": 0 },
+    { "horse_number": 11, "horse_name": "ウエストナウ", "trainer_name": "寺島　良", "trainer_east_west": "西", "horse_weight": 492, "horse_weight_difference_with_previous_race": -16 },
+    { "horse_number": 12, "horse_name": "メイショウゲキリン", "trainer_name": "笹田　和秀", "trainer_east_west": "西", "horse_weight": 514, "horse_weight_difference_with_previous_race": -6 },
+    { "horse_number": 13, "horse_name": "マイネルカンパーナ", "trainer_name": "青木　孝文", "trainer_east_west": "東", "horse_weight": 418, "horse_weight_difference_with_previous_race": 10 },
+    { "horse_number": 14, "horse_name": "ミクニインスパイア", "trainer_name": "林　徹", "trainer_east_west": "東", "horse_weight": 504, "horse_weight_difference_with_previous_race": 4 },
+    { "horse_number": 15, "horse_name": "ホーエリート", "trainer_name": "田島　俊明", "trainer_east_west": "東", "horse_weight": 480, "horse_weight_difference_with_previous_race": -2 },
+    { "horse_number": 16, "horse_name": "キングズパレス", "trainer_name": "戸田　博文", "trainer_east_west": "東", "horse_weight": 512, "horse_weight_difference_with_previous_race": 14 },
+    { "horse_number": 17, "horse_name": "キングスコール", "trainer_name": "矢作　芳人", "trainer_east_west": "西", "horse_weight": 496, "horse_weight_difference_with_previous_race": -6 },
+    { "horse_number": 18, "horse_name": "ミステリーウェイ", "trainer_name": "小林　真也", "trainer_east_west": "西", "horse_weight": 504, "horse_weight_difference_with_previous_race": -2 }
+  ]
+}

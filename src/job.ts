@@ -61,6 +61,11 @@ export interface JobState {
   /** 買い目の点数を列から数え直し、見出しの数字を差し替えた記録。差し替えが無いときは未設定。 */
   ticketCountCorrections?: TicketCountCorrection[];
   /**
+   * レース予想の入力で空欄にした項目。予想は続ける。
+   * 予想の前のジョブでは未設定。
+   */
+  raceInputGaps?: string[];
+  /**
    * generateContent ごとの finishReason、modelVersion、usageMetadata。
    * コース分析だけ検索クエリも入る。本文と引用は入れない。
    */

@@ -327,7 +327,7 @@ export class BashiraAuth extends DurableObject<Env> {
         token,
         fetchImpl: (url, init) => this.trackedFetch(budget, url, init),
         nextId: () => ++this.rpcId,
-        clientInfo: { name: "jra-bashira-predict", version: "0.1.0" },
+        clientInfo: { name: "jra-bashira-predict", version: "0.2.0" },
       });
       this.session = opened.session;
       await this.ctx.storage.put("mcp_session", this.session);
