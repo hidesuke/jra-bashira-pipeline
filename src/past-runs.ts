@@ -97,7 +97,11 @@ export const PAST_RUN_HEADER = [
   "単勝",
   "前半3F",
   "後半3F",
+  "条件",
 ];
+
+/** 条件列を足す前の27列。保存済みの表を読むときだけ使う。新しく書く表には使わない。 */
+export const PAST_RUN_LEGACY_HEADER = PAST_RUN_HEADER.slice(0, -1);
 
 /** 一次予想へ渡す近10走の見出し。抽出もこの文字列だけを許可する。 */
 export const PAST_RUNS_TITLE = "# 過去走（近10走）";
@@ -116,16 +120,35 @@ export const COURSE_TRACK_EMPTY = "同じ競馬場: ";
 export const COURSE_RELATED_EMPTY = "関連コース: ";
 
 export function pastRunHeaderLine(): string {
-  return `| ${PAST_RUN_HEADER.join(" | ")} |`;
+  return markdownCells(PAST_RUN_HEADER);
 }
 
 export function pastRunRuleLine(): string {
-  return `| ${PAST_RUN_HEADER.map(() => "---").join(" | ")} |`;
+  return markdownRule(PAST_RUN_HEADER);
+}
+
+export function pastRunLegacyHeaderLine(): string {
+  return markdownCells(PAST_RUN_LEGACY_HEADER);
+}
+
+export function pastRunLegacyRuleLine(): string {
+  return markdownRule(PAST_RUN_LEGACY_HEADER);
+}
+
+/** 見出し行なら、その列名。今の28列と、条件列が無い27列のどちらも受ける。 */
+export function pastRunTableHeader(line: string): readonly string[] | null {
+  if (line === pastRunHeaderLine()) return PAST_RUN_HEADER;
+  if (line === pastRunLegacyHeaderLine()) return PAST_RUN_LEGACY_HEADER;
+  return null;
+}
+
+export function pastRunRuleFor(header: readonly string[]): string {
+  return markdownRule(header);
 }
 
 export const PAST_RUN_COLUMN_COUNT = PAST_RUN_HEADER.length;
 
-/** スキーマの競走種別。スペースは項目内の区切りで、JRA の競走名には入らない。 */
+/** スキーマの競走種別。スペースは項目内の区切りで、条件列の表記には入れない。 */
 const RACE_TYPE_LABEL: Record<string, string> = {
   "2歳": "2歳",
   "3歳": "3歳",
@@ -140,19 +163,26 @@ const RACE_TYPE_LABEL: Record<string, string> = {
 };
 
 /**
- * レース名。特別競走は race_name_main。
- * それが空のときは、競走種別とクラスが両方あるときだけつなぐ（3歳以上1勝クラス、2歳未勝利、障害3歳以上未勝利）。
- * どちらかが無い、または種別がこの一覧に無いときは空欄。クラスの言い換えはしない。
+ * 条件列。特別競走かどうかは見ない。
+ * race_type と race_condition が両方あり、種別がこの一覧のときだけつなぐ。
+ * 例は 3歳以上2勝クラス、2歳未勝利、3歳以上オープン、障害3歳以上未勝利。
+ * どちらかが無い、または種別が一覧に無いときは空欄。クラスの言い換えはしない。
  */
-export function pastRunRaceName(row: Record<string, unknown>): string {
-  const main = stringField(row, "race_name_main");
-  if (main) return main;
+export function pastRunCondition(row: Record<string, unknown>): string {
   const type = stringField(row, "race_type");
   const condition = stringField(row, "race_condition");
   if (!type || !condition) return "";
   const label = RACE_TYPE_LABEL[type];
   if (!label) return "";
   return `${label}${condition}`;
+}
+
+function markdownCells(header: readonly string[]): string {
+  return `| ${header.join(" | ")} |`;
+}
+
+function markdownRule(header: readonly string[]): string {
+  return `| ${header.map(() => "---").join(" | ")} |`;
 }
 
 /** コース成績の先頭に書く関連コースの行。null は一覧が読めない。 */
@@ -478,7 +508,7 @@ function pastRunRow(row: Record<string, unknown>, paces: Map<string, RacePace>):
   const cells = [
     meetingDay(rawDate) ?? rawDate ?? "",
     stringField(row, "race_track") ?? "",
-    pastRunRaceName(row),
+    stringField(row, "race_name_main") ?? "",
     stringField(row, "grade") ?? "",
     stringField(row, "race_condition") ?? "",
     stringField(row, "surface") ?? "",
@@ -503,6 +533,7 @@ function pastRunRow(row: Record<string, unknown>, paces: Map<string, RacePace>):
     num(numberField(row, "win_odds")),
     num(pace.first3f),
     num(pace.last3f),
+    pastRunCondition(row),
   ];
   return `| ${cells.map(cell).join(" | ")} |`;
 }

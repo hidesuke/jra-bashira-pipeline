@@ -72,6 +72,12 @@ function cells(line: string): string[] {
   return line.slice(1, -1).split("|").map((cell) => cell.trim());
 }
 
+function dropLastCell(line: string): string {
+  const parts = line.slice(1, -1).split("|");
+  parts.pop();
+  return `|${parts.join("|")}|`;
+}
+
 describe("allowed sections", () => {
   it("keeps empty cells empty and keeps a real zero", () => {
     const data = past.split("\n").find((line) => line.startsWith("| 2026-10-12"));
@@ -89,15 +95,24 @@ describe("allowed sections", () => {
     expect(missing?.blank["レース名"]).toBe(0);
     expect(missing?.blank["前半3F"]).toBe(1);
     expect(missing?.blank["後半3F"]).toBe(1);
+    expect(missing?.blank["条件"]).toBe(1);
     expect(missing?.note).toBe(PAST_RUNS_MISSING_NOTE);
     expect(missing?.note).toContain("未出走");
-    expect(missing?.note).toContain("レース名");
-    expect(Object.keys(missing?.blank ?? {})).toHaveLength(27);
+    expect(missing?.note).toContain("レース名の空欄は特別競走ではないことを表す");
+    expect(Object.keys(missing?.blank ?? {})).toHaveLength(28);
+    expect(Object.keys(missing?.blank ?? {}).at(-1)).toBe("条件");
   });
 
-  it("counts a blank race name and blank pace without rewriting the markdown", () => {
-    const named = { ...row };
-    const unnamed = { ...row, race_meeting_date: "2026-09-01T00:00:00Z", race_number: 3, race_name_main: null };
+  it("keeps a non-special race name blank and still fills the condition column", () => {
+    const named = { ...row, race_type: "3歳以上", race_condition: "オープン" };
+    const unnamed = {
+      ...row,
+      race_meeting_date: "2026-09-01T00:00:00Z",
+      race_number: 3,
+      race_name_main: null,
+      race_type: "2歳",
+      race_condition: "未勝利",
+    };
     const text = renderPastRuns({
       race,
       horses: [horse],
@@ -105,15 +120,32 @@ describe("allowed sections", () => {
       paces: new Map([["20261012-05-05", { first3f: 34.5, last3f: 35.6 }]]),
     });
     const missing = describePastRunsMissing(text);
+    expect(text).toContain("| 2026-10-12 | 東京 | 前走 |");
     expect(text).toContain("| 2026-09-01 | 東京 |  |");
+    expect(text).toContain("| 3歳以上オープン |");
+    expect(text).toContain("| 2歳未勝利 |");
     expect(text).toContain("| 0 |");
     expect(text).not.toContain("T00:00:00Z");
     expect(missing).toMatchObject({ rows: 2, note: PAST_RUNS_MISSING_NOTE });
     expect(missing?.blank["レース名"]).toBe(1);
+    expect(missing?.blank["条件"]).toBe(0);
     expect(missing?.blank["前半3F"]).toBe(1);
     expect(missing?.blank["後半3F"]).toBe(1);
     expect(missing?.blank["着差"]).toBe(0);
-    expect(describePastRunsMissing(text)?.rows).toBe(2);
+  });
+
+  it("still reads a saved table from before the condition column", () => {
+    const legacy = past
+      .split("\n")
+      .map((line) => (line.startsWith("|") ? dropLastCell(line) : line))
+      .join("\n");
+    expect(legacy).not.toContain("条件");
+    expect(extractPastRuns(legacy)).toEqual({ text: legacy });
+    const missing = describePastRunsMissing(legacy);
+    expect(missing?.rows).toBe(1);
+    expect(missing?.blank).not.toHaveProperty("条件");
+    expect(missing?.blank["レース名"]).toBe(0);
+    expect(missing?.note).toContain("レース名の空欄は特別競走ではないことを表す");
   });
 
   it("extracts only the past-run and course sections from a user message", () => {

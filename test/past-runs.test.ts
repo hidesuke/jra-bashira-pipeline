@@ -10,7 +10,7 @@ import {
   loadPastPerformance,
   planCareerBatches,
   planPaceQueries,
-  pastRunRaceName,
+  pastRunCondition,
   raceIdOf,
   renderCourseRecords,
   renderPastRuns,
@@ -161,6 +161,7 @@ describe("past runs table", () => {
       place: 2,
     });
     row.grade = "G3";
+    row.race_type = "3歳以上";
     row.race_condition = "3勝クラス";
     row.race_name_main = "前走";
     row.rail_type = "A";
@@ -189,8 +190,8 @@ describe("past runs table", () => {
       rows: [row],
       paces: new Map([["20261012-05-05", { first3f: 34.5, last3f: 35.6 }]]),
     });
-    expect(text).toContain("| 人気 | 単勝 | 前半3F | 後半3F |");
-    expect(text).toContain("| 2026-10-12 | 東京 | 前走 | G3 | 3勝クラス | 芝 | 1600 | A | 良 | 16 | 2 | 1:33.2 | 0.2 | 33.8 | 1 | 3-3-2-2 | 騎手A | なし | 56 | 470 | -2 | 3 | 28 | 4 | 6.5 | 34.5 | 35.6 |");
+    expect(text).toContain("| 人気 | 単勝 | 前半3F | 後半3F | 条件 |");
+    expect(text).toContain("| 2026-10-12 | 東京 | 前走 | G3 | 3勝クラス | 芝 | 1600 | A | 良 | 16 | 2 | 1:33.2 | 0.2 | 33.8 | 1 | 3-3-2-2 | 騎手A | なし | 56 | 470 | -2 | 3 | 28 | 4 | 6.5 | 34.5 | 35.6 | 3歳以上3勝クラス |");
     expect(raceIdOf(row)).toBe("20261012-05-05");
     expect(raceIdOf({ race_meeting_date: "2026-10-12", race_track: "地方", race_number: 1 })).toBeNull();
     expect(raceIdOf({ race_meeting_date: "2026-10-12T00:00:00Z", race_track: "東京", race_number: 5 })).toBe("20261012-05-05");
@@ -229,7 +230,7 @@ describe("past runs table", () => {
     expect(countPlaces([current, dated], race, () => true)).toEqual({ first: 0, second: 1, third: 0, fourth: 0, fifth: 0, other: 0 });
   });
 
-  it("builds a condition race name from race type and class, and leaves it blank when either is missing", () => {
+  it("puts race type and class in the condition column and leaves the race name as race_name_main", () => {
     const named = run({ date: "2026-10-12", track: "東京", number: 5, surface: "芝", distance: 1600, place: 2 });
     named.race_name_main = "前走";
     named.race_type = "3歳";
@@ -259,27 +260,34 @@ describe("past runs table", () => {
     const unknown = run({ date: "2026-01-01", track: "東京", number: 9, surface: "芝", distance: 1600, place: 10 });
     unknown.race_type = "年齢不明";
     unknown.race_condition = "未勝利";
-    expect(pastRunRaceName(named)).toBe("前走");
-    expect(pastRunRaceName(winClass)).toBe("3歳1勝クラス");
-    expect(pastRunRaceName(older)).toBe("3歳以上2勝クラス");
-    expect(pastRunRaceName(maiden)).toBe("2歳未勝利");
-    expect(pastRunRaceName(debut)).toBe("2歳新馬");
-    expect(pastRunRaceName(jump)).toBe("障害3歳以上未勝利");
-    expect(pastRunRaceName(oldMoney)).toBe("4歳以上500万円以下");
-    expect(pastRunRaceName(oldMoney)).not.toBe("4歳以上1勝クラス");
-    expect(pastRunRaceName(noType)).toBe("");
-    expect(pastRunRaceName(noClass)).toBe("");
-    expect(pastRunRaceName(unknown)).toBe("");
+    expect(pastRunCondition(named)).toBe("3歳1勝クラス");
+    expect(pastRunCondition(winClass)).toBe("3歳1勝クラス");
+    expect(pastRunCondition(older)).toBe("3歳以上2勝クラス");
+    expect(pastRunCondition(maiden)).toBe("2歳未勝利");
+    expect(pastRunCondition(debut)).toBe("2歳新馬");
+    expect(pastRunCondition(jump)).toBe("障害3歳以上未勝利");
+    expect(pastRunCondition({ race_type: "3歳以上", race_condition: "オープン" })).toBe("3歳以上オープン");
+    expect(pastRunCondition(oldMoney)).toBe("4歳以上500万円以下");
+    expect(pastRunCondition(noType)).toBe("");
+    expect(pastRunCondition(noClass)).toBe("");
+    expect(pastRunCondition(unknown)).toBe("");
     const text = renderPastRuns({
       race,
       horses: [horse],
       rows: [named, winClass, noType],
       paces: new Map(),
     });
-    expect(text).toContain("| 前走 |");
+    expect(text).toContain("| 後半3F | 条件 |");
+    expect(text).toContain("| 2026-10-12 | 東京 | 前走 |");
     expect(text).toContain("| 3歳1勝クラス |");
+    expect(text).toContain("| 2026-09-01 | 東京 |  |");
     expect(text).toContain("| 2026-03-01 | 東京 |  |");
     expect(text).not.toContain("年齢不明");
+    const winLine = text.split("\n").find((line) => line.startsWith("| 2026-09-01"));
+    expect(winLine?.endsWith("| 3歳1勝クラス |")).toBe(true);
+    const cells = winLine!.slice(1, -1).split("|").map((cell) => cell.trim());
+    expect(cells[2]).toBe("");
+    expect(cells.at(-1)).toBe("3歳1勝クラス");
   });
 
   it("plans one get_entries until the row budget, then another, and chunks pace ids by 100", () => {
