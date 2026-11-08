@@ -292,6 +292,7 @@ function warningJson(warning: ConsistencyWarning): Record<string, unknown> {
     race_name: warning.raceName ?? null,
     claimed: warning.claimed,
     actual: warning.actual,
+    snippet: warning.snippet,
   };
 }
 

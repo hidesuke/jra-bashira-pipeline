@@ -157,7 +157,8 @@ describe("prediction consistency", () => {
         raceName: "目黒記念",
         claimed: "2着",
         actual: "4着",
-        message: "ミラージュナイトの目黒記念は4着だが、予想本文は2着と書いている",
+        snippet: "目黒記念で2着",
+        message: "ミラージュナイトの目黒記念は4着だが、予想本文は2着と書いている: 「目黒記念で2着」",
       },
     ]);
     expect(checkPredictionConsistency("ミラージュナイトは目黒記念で4着。今回斤量 57 kg。", [horse!])).toEqual([]);

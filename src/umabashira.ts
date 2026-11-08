@@ -7,7 +7,7 @@ const SCRATCHED = new Set(["出走取消", "発走除外", "競走除外"]);
 export const UMABASHIRA_LIMITS = [
   "各馬の近走は最大10走。get_entries を馬名で race_meeting_date 降順に取り、今回のレースと upcoming を除いた残りを使う。10走未満なら返った走だけを書く。",
   "着差は time_difference_with_winner_sec（秒。勝者が負、敗者が正）。馬身（ハナ・アタマ・クビ等）は BASHIRA に無い。",
-  "頭数は scheduled_horse_count（出走予定頭数）。確定頭数は get_entries に無い。",
+  "着順は公式着順。正常走は「4着/14頭」と頭数（scheduled_horse_count。確定頭数は無い）を並べる。race_abnormality が異常なしのときは書かない。取消・除外・中止・失格は着順の代わりにその区分を書く。",
   "通過順は馬ごとの 1〜4 角順位。レース単位の通過順文字列、各近走のラップ、調教タイムは無い。",
   "同名で近走を特定できない馬は『同名馬のため近走取得不可』と、通算出走数・前走着順・前走距離・前走馬場・間隔だけを書く。近走なしとは別で、記録が無いという意味ではない。",
 ].join("\n");
@@ -34,8 +34,7 @@ export function formatPastRun(row: Record<string, unknown>): string {
     courseLabel(row),
     stringField(row, "track_condition") ?? "馬場不明",
     classLabel(row),
-    `${place}`,
-    `頭数${numberField(row, "scheduled_horse_count") ?? "—"}`,
+    place,
     `時計${formatTime(numberField(row, "finish_time_sec"))}`,
     `着差${margin == null ? "—" : `${trimNum(margin)}秒`}`,
     `通過${passing(row)}`,
@@ -86,15 +85,26 @@ function horseBlock(entry: Record<string, unknown>, task: FormTask | undefined):
   return lines.join("\n");
 }
 
+/** 着順が付かない異常。これ以外（異常なし・降着）は公式着順を書く。 */
+const NON_FINISH = new Set(["出走取消", "発走除外", "競走除外", "競走中止", "失格", "落馬再騎乗"]);
+
 function placeLabel(row: Record<string, unknown>): string {
   const abnormality = stringField(row, "race_abnormality");
-  if (abnormality) return abnormality;
   const place = numberField(row, "official_result");
-  const text = place == null ? "着順—" : `${trimNum(place)}着`;
-  const extra = [stringField(row, "entry_status") === "provisional" ? "速報" : null, row.dead_heat === true ? "同着" : null]
+  const heads = numberField(row, "scheduled_horse_count");
+  const headText = heads == null ? null : `${trimNum(heads)}頭`;
+  const replacesFinish = abnormality != null && abnormality !== "異常なし" && (place == null || NON_FINISH.has(abnormality));
+  if (replacesFinish && abnormality) return headText ? `${abnormality}/${headText}` : abnormality;
+  const finish = place == null ? "着順—" : `${trimNum(place)}着`;
+  const withHeads = headText ? `${finish}/${headText}` : finish;
+  const extra = [
+    abnormality && abnormality !== "異常なし" ? abnormality : null,
+    stringField(row, "entry_status") === "provisional" ? "速報" : null,
+    row.dead_heat === true ? "同着" : null,
+  ]
     .filter((part): part is string => Boolean(part))
     .join("・");
-  return extra ? `${text}（${extra}）` : text;
+  return extra ? `${withHeads}（${extra}）` : withHeads;
 }
 
 function courseLabel(row: Record<string, unknown>): string {
