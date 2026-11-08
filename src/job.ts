@@ -1,6 +1,7 @@
 import type { CourseSummaryRecord } from "./course-summary";
 import type { ConsistencyWarning } from "./consistency";
 import type { FormTask } from "./form";
+import type { CourseGeminiCall, GeminiCallRecord } from "./gemini";
 import type { OddsSummary } from "./odds";
 import type { StatTask } from "./stats";
 import { keys, kvGetJson, kvPutJson, sleepMs } from "./kv";
@@ -56,6 +57,14 @@ export interface JobState {
   notionContinuations?: number;
   /** 予想本文と成績の食い違い。Notion には書かない。未実施のジョブでは未設定。 */
   consistencyWarnings?: ConsistencyWarning[];
+  /**
+   * generateContent ごとの finishReason、modelVersion、usageMetadata。
+   * コース分析だけ検索クエリも入る。本文と引用は入れない。
+   */
+  gemini?: {
+    course?: CourseGeminiCall;
+    race?: GeminiCallRecord;
+  };
   /** 予想入力を別キーへ書いた結果。本文そのものは入れない。 */
   predictInput?: {
     stored: boolean;

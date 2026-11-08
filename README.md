@@ -14,7 +14,7 @@
 | --- | --- |
 | 実行 | このリポジトリの Worker `jra-bashira-pipeline` |
 | 入力 | BASHIRA の MCP。`get_races`、`get_entries`、`get_odds`、`get_stats` |
-| 文章生成 | Gemini。先にコース分析を作り、その本文を入れてレース予想を作る |
+| 文章生成 | Gemini。先にコース分析を作り、その本文を入れてレース予想を作る。コース分析だけ Google 検索を付ける。両方の思考レベルは `high` |
 | 出力 | Notion データベース `3c57c7b2e419808ba999e9c1909fa39c`（「場立ちのhidesuke JRA予想」）。スキーマは変えず、別ページを追加する |
 | プロンプト | 非公開リポジトリ `hidesuke/jra-bashira-prompts` にだけ本文を置く。Worker は KV の `prompt:v2:course` と `prompt:v2:race` を読む |
 
@@ -121,7 +121,7 @@ npx wrangler secret put ACCESS_AUD
 | `GET` | `/oauth/start` | Access JWT | BASHIRA の認可を始める |
 | `GET` | `/oauth/callback` | なし | 認可コードを受け取る。`state` と PKCE で紐づける |
 | `GET` | `/oauth/status` | Access JWT | 認可済みかを返す。トークンは返さない |
-| `GET` | `/admin/jobs` | Access JWT | ジョブの進捗と失敗理由 |
+| `GET` | `/admin/jobs` | Access JWT | ジョブの進捗と失敗理由。Gemini の `finishReason`、`modelVersion`、トークン数。コース分析は検索クエリも |
 | `GET` | `/admin/jobs/input` | Access JWT | 予想に渡した馬柱と、馬ごとの解決結果 |
 | `GET` | `/admin/models` | Access JWT | Gemini モデルの一覧と現在値 |
 | `PUT` | `/admin/models` | Access JWT | コース分析またはレース予想のモデルを変える |

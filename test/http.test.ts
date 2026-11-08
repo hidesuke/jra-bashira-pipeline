@@ -155,6 +155,30 @@ describe("http", () => {
         courseVariant: null,
         odds: null,
         prediction: { courseText: secret, 予想本文: secret },
+        gemini: {
+          course: {
+            finishReason: "STOP",
+            modelVersion: "mv-course",
+            usageMetadata: {
+              promptTokenCount: 1,
+              candidatesTokenCount: 2,
+              thoughtsTokenCount: 3,
+              totalTokenCount: 6,
+            },
+            webSearchQueryCount: 1,
+            webSearchQueries: ["福島 芝 1600"],
+          },
+          race: {
+            finishReason: "MAX_TOKENS",
+            modelVersion: "mv-race",
+            usageMetadata: {
+              promptTokenCount: 4,
+              candidatesTokenCount: 5,
+              thoughtsTokenCount: 6,
+              totalTokenCount: 15,
+            },
+          },
+        },
       }),
     );
     const job = await handleRequest(authed("/admin/jobs?race_key=20261107-03-11"), http);
@@ -164,6 +188,25 @@ describe("http", () => {
     expect(body).not.toContain("courseText");
     expect(body).toContain("prompt:v2:course");
     expect(body).toContain("\"course_summary\":null");
+    const listed = JSON.parse(body) as {
+      gemini: {
+        course: { finishReason: string; webSearchQueryCount: number; webSearchQueries: string[]; usageMetadata: { thoughtsTokenCount: number } };
+        race: { finishReason: string; webSearchQueries?: string[] };
+      };
+    };
+    expect(listed.gemini.course).toMatchObject({
+      finishReason: "STOP",
+      modelVersion: "mv-course",
+      webSearchQueryCount: 1,
+      webSearchQueries: ["福島 芝 1600"],
+      usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 2, thoughtsTokenCount: 3, totalTokenCount: 6 },
+    });
+    expect(listed.gemini.race).toEqual({
+      finishReason: "MAX_TOKENS",
+      modelVersion: "mv-race",
+      usageMetadata: { promptTokenCount: 4, candidatesTokenCount: 5, thoughtsTokenCount: 6, totalTokenCount: 15 },
+    });
+    expect(listed.gemini.race.webSearchQueries).toBeUndefined();
   });
 
   it("returns the stored course summary without the prompt body", async () => {
@@ -191,18 +234,18 @@ describe("http", () => {
       }),
     );
     const job = await handleRequest(authed("/admin/jobs?race_key=20261107-03-11"), http);
-    const body = (await job.json()) as {
+    const summary = (await job.json()) as {
       course_summary: string;
       course_summary_error: string | null;
       course_summary_period: { from: string; to: string };
       course_summary_race_count: number;
     };
     expect(job.status).toBe(200);
-    expect(body.course_summary).toContain("先頭: 1頭");
-    expect(body.course_summary_error).toBeNull();
-    expect(body.course_summary_period).toEqual({ from: "2021-11-06", to: "2026-11-06" });
-    expect(body.course_summary_race_count).toBe(40);
-    expect(JSON.stringify(body)).not.toContain("SECRET_PROMPT_BODY");
+    expect(summary.course_summary).toContain("先頭: 1頭");
+    expect(summary.course_summary_error).toBeNull();
+    expect(summary.course_summary_period).toEqual({ from: "2021-11-06", to: "2026-11-06" });
+    expect(summary.course_summary_race_count).toBe(40);
+    expect(JSON.stringify(summary)).not.toContain("SECRET_PROMPT_BODY");
   });
 
   it("returns stored predict input only behind Access", async () => {

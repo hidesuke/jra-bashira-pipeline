@@ -1,6 +1,7 @@
 import { identifyCaller, type Caller } from "./access";
 import type { ConsistencyWarning } from "./consistency";
 import { horseFormSnapshots, type HorseFormSnapshot } from "./form";
+import type { CourseGeminiCall, GeminiCallRecord, GeminiUsageMetadata } from "./gemini";
 import { loadJob } from "./job";
 import { keys } from "./kv";
 import { loadPredictInput } from "./predict-input";
@@ -243,6 +244,10 @@ async function getJob(url: URL, deps: HttpDeps): Promise<Response> {
         : null,
     course_summary_race_count: state.courseSummary?.raceCount ?? null,
     course_summary_race_count_truncated: state.courseSummary?.raceCountTruncated ?? false,
+    gemini: {
+      course: courseGeminiJson(state.gemini?.course),
+      race: raceGeminiJson(state.gemini?.race),
+    },
     odds: state.odds
       ? {
           available: state.odds.available,
@@ -279,6 +284,38 @@ async function getJobInput(url: URL, deps: HttpDeps): Promise<Response> {
   if (include.has("umabashira")) body.umabashira = stored?.umabashira ?? null;
   if (include.has("input")) body.race_input = stored?.raceInput ?? null;
   return json(body);
+}
+
+function courseGeminiJson(record: CourseGeminiCall | undefined): Record<string, unknown> | null {
+  if (!record) return null;
+  return {
+    ...callJson(record),
+    webSearchQueryCount:
+      typeof record.webSearchQueryCount === "number" ? record.webSearchQueryCount : (record.webSearchQueries?.length ?? 0),
+    webSearchQueries: Array.isArray(record.webSearchQueries) ? record.webSearchQueries : [],
+  };
+}
+
+function raceGeminiJson(record: GeminiCallRecord | undefined): Record<string, unknown> | null {
+  if (!record) return null;
+  return callJson(record);
+}
+
+function callJson(record: GeminiCallRecord): Record<string, unknown> {
+  return {
+    finishReason: record.finishReason,
+    modelVersion: record.modelVersion,
+    usageMetadata: usageJson(record.usageMetadata),
+  };
+}
+
+function usageJson(usage: GeminiUsageMetadata | undefined): GeminiUsageMetadata {
+  return {
+    promptTokenCount: usage?.promptTokenCount ?? null,
+    candidatesTokenCount: usage?.candidatesTokenCount ?? null,
+    thoughtsTokenCount: usage?.thoughtsTokenCount ?? null,
+    totalTokenCount: usage?.totalTokenCount ?? null,
+  };
 }
 
 function includeParts(url: URL): Set<string> {

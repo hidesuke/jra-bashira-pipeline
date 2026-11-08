@@ -10,7 +10,7 @@ curl -sS "https://<worker>/admin/jobs?race_key=20261107-03-11" \
   -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET"
 ```
 
-`race_key` が無いときは 400、ジョブが無いときは 404 です。応答には `race_key`、`run_id`、`phase`、`error`、`requested_by`、`notion_page_id`、`course_variant`、`odds` と、コースデータ要約の欄が入ります。`phase` が `error` のとき `error` に理由が入ります。refresh の失敗もここに出ます。`course_variant` は常に null です。理由は [course-odds.md](course-odds.md) です。
+`race_key` が無いときは 400、ジョブが無いときは 404 です。応答には `race_key`、`run_id`、`phase`、`error`、`requested_by`、`notion_page_id`、`course_variant`、`gemini`、`odds` と、コースデータ要約の欄が入ります。`phase` が `error` のとき `error` に理由が入ります。refresh の失敗もここに出ます。`course_variant` は常に null です。理由は [course-odds.md](course-odds.md) です。プロンプト本文、コース分析の本文、予想本文、検索の引用は返しません。
 
 コースデータ要約は、予想の前に計算したものです。プロンプトの本文は返しません。
 
@@ -21,6 +21,26 @@ curl -sS "https://<worker>/admin/jobs?race_key=20261107-03-11" \
 | `course_summary_period` | `{ from, to }`。期間が決まる前に失敗したときは null |
 | `course_summary_race_count` | 確定済みレース数。打ち切れたときは返った件数（下限）。未計算は null |
 | `course_summary_race_count_truncated` | レース一覧が上限で切れたとき true |
+
+`gemini.course` と `gemini.race` は、その呼び出しがまだ無いとき null です。あるときは次です。名前は Gemini の応答と同じです。
+
+| フィールド | 内容 |
+| --- | --- |
+| `finishReason` | 候補の `finishReason`。文字列で無いときは null |
+| `modelVersion` | 応答の `modelVersion`。無いときは null |
+| `usageMetadata.promptTokenCount` | 入力トークン数。無いときは null |
+| `usageMetadata.candidatesTokenCount` | 出力トークン数。無いときは null |
+| `usageMetadata.thoughtsTokenCount` | 思考トークン数。無いときは null |
+| `usageMetadata.totalTokenCount` | 合計トークン数。無いときは null |
+
+コース分析だけ、次も返します。レース予想のオブジェクトには入れません。
+
+| フィールド | 内容 |
+| --- | --- |
+| `webSearchQueryCount` | `groundingMetadata.webSearchQueries` の文字列の件数 |
+| `webSearchQueries` | そのクエリ文字列。文字列以外は捨てる |
+
+引用（`groundingChunks` など）はジョブにもこの応答にも入れません。呼び出しの形は [prompts.md](prompts.md) です。
 
 `odds` があるときは `available`、`kind`、`observed_at_jst`、`reason` です。
 
