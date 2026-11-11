@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveCourseSide } from "../src/course-side";
 import { handleRequest, type HttpDeps } from "../src/http";
 import { describePastRunsMissing, extractCourseRecords, extractPastRuns, extractRunnerStats, PAST_RUNS_MISSING_NOTE } from "../src/input-sections";
 import { RUNNER_STATS_HEADING, renderRunnerStats, type NameStat } from "../src/runner-stats";
@@ -573,6 +574,24 @@ describe("GET /admin/jobs/input include=past_runs", () => {
       minCount: 30,
     }).text;
     expect(extractRunnerStats(`${PROMPT}\n\n${rendered}\n\n${TAIL}`)).toEqual({ text: rendered });
+    const sided = renderRunnerStats({
+      horses: [{ horseNumber: 1, horseName: "ア", sire: "父一", broodmareSire: "母父一", jockey: "騎手A" }],
+      venue: "京都",
+      surface: "芝",
+      distance: 1600,
+      period: { from: "2021-11-07", to: "2026-11-07" },
+      periodYears: 5,
+      dataThrough: "2026-11-03",
+      scopes: ["jra_and_non_jra"],
+      called: true,
+      sires: new Map([["父一", stat(48, 8, 20)]]),
+      broodmareSires: new Map([["母父一", stat(40, 4, 10)]]),
+      jockeys: new Map([["騎手A", stat(40, 8, 15)]]),
+      minCount: 30,
+      courseSide: resolveCourseSide({ raw: "外", raceField: true, statsField: true, racesField: true }),
+    }).text;
+    expect(sided).toContain("回り: 外（この回りだけを集計。母数が少なくても内と外は混ぜない）");
+    expect(extractRunnerStats(`${PROMPT}\n\n${sided}\n\n${TAIL}`)).toEqual({ text: sided });
     expect(JSON.stringify(extractRunnerStats(`${PROMPT}\n\n${rendered}\n\n${TAIL}`))).not.toContain("DUMMY_");
     const fake = extractRunnerStats(`${RUNNER_STATS_HEADING}\nDUMMY_PROMPT_LEAK_9f3a これは節ではありません`);
     expect(fake).toEqual({ reason: "保存済みの出走馬のコース成績の形が一致しないため返しません" });

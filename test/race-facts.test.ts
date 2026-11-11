@@ -8,6 +8,7 @@ import type { JobState } from "../src/job";
 import { saveJob } from "../src/job";
 import { MemoryKv } from "../src/kv";
 import { savePredictInput } from "../src/predict-input";
+import { resolveCourseSide } from "../src/course-side";
 import { buildRaceFacts, MISSING_INNER_OUTER, MISSING_TEMPORARY_RAIL } from "../src/race-facts";
 import { horseFactGaps, renderUmabashira } from "../src/umabashira";
 
@@ -150,5 +151,45 @@ describe("20261108 Tokyo 11R race facts", () => {
     expect(page).toContain("調教師 —");
     expect(page).toContain("馬体重 450kg（増減—）");
     expect(page).toContain("出走取消");
+  });
+
+  it("writes a known course_side and does not invent one", () => {
+    const outer = buildRaceFacts({
+      raceRow: card.race,
+      entries: card.entries,
+      courseSide: resolveCourseSide({ raw: "外", raceField: true, statsField: true, racesField: true }),
+    });
+    expect(outer.text).toContain("内外回り: 外\n仮柵: ");
+    expect(outer.text).toContain("値は 内、外、外→内、内→外、なし");
+    expect(outer.gaps).toEqual([MISSING_TEMPORARY_RAIL]);
+    const plain = buildRaceFacts({
+      raceRow: card.race,
+      entries: card.entries,
+      courseSide: resolveCourseSide({ raw: "なし", raceField: true, statsField: true, racesField: true }),
+    });
+    expect(plain.text).toContain("内外回り: なし\n");
+    expect(plain.gaps).toEqual([MISSING_TEMPORARY_RAIL]);
+    const empty = buildRaceFacts({
+      raceRow: card.race,
+      entries: card.entries,
+      courseSide: resolveCourseSide({ raw: null, raceField: true, statsField: true, racesField: true }),
+    });
+    expect(empty.text).toContain("内外回り: \n仮柵: ");
+    expect(empty.gaps[0]).toBe("内外回り（値が無い）");
+    const broken = buildRaceFacts({
+      raceRow: card.race,
+      entries: card.entries,
+      courseSide: resolveCourseSide({ raw: "外{{leak}}", raceField: true, statsField: true, racesField: true }),
+    });
+    expect(broken.text).not.toContain("{{");
+    expect(broken.text).toContain("内外回り: \n");
+    expect(broken.gaps[0]).toBe("内外回り（値が読めない）");
+    const bend = buildRaceFacts({
+      raceRow: card.race,
+      entries: card.entries,
+      courseSide: resolveCourseSide({ raw: "内→外", raceField: true, statsField: false, racesField: true }),
+    });
+    expect(bend.text).toContain("内外回り: 内→外\n");
+    expect(bend.gaps[0]).toBe("内外回り（get_stats に course_side が無いため絞っていない）");
   });
 });

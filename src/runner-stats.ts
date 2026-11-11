@@ -1,5 +1,6 @@
 import type { BashiraPort } from "./bashira/port";
 import { readNameResolutions, type NameResolutionEntry } from "./bashira/mcp";
+import { courseSideKeySuffix, courseSideScopeLine, withCourseSideFilter, type CourseSide, type CourseSideState } from "./course-side";
 import { courseSummaryPeriod, formatRate } from "./course-summary";
 import { yearInQualifiedName } from "./form";
 import { payloadNote, rowsToObjects, stringField, numberField } from "./rows";
@@ -90,6 +91,8 @@ interface CourseWindow {
   surface: string;
   distance: number;
   period: { from: string; to: string };
+  /** 内・外・外→内・内→外のときだけ。なしと不明は付けない。 */
+  sideFilter?: CourseSide | null;
 }
 
 interface Budget {
@@ -136,7 +139,7 @@ export function runnerHorses(entries: Record<string, unknown>[]): RunnerHorse[] 
   return horses;
 }
 
-/** コース（場・馬場・距離・期間）× 騎手 × data_version。期間はレース日が違うと 1 日ずれる。 */
+/** コース（場・馬場・距離・期間・絞った回り）× 騎手 × data_version。期間はレース日が違うと 1 日ずれる。なしは回りの断片を付けない。 */
 export function jockeyCourseCacheKey(input: CourseWindow & { dataVersion: string; jockey: string }): string {
   return [
     "jockey-course:v1",
@@ -147,7 +150,7 @@ export function jockeyCourseCacheKey(input: CourseWindow & { dataVersion: string
     input.period.from,
     input.period.to,
     encodeURIComponent(input.jockey),
-  ].join(":");
+  ].join(":") + courseSideKeySuffix(input.sideFilter);
 }
 
 export function pedigreeStatsArgs(course: CourseWindow, field: "sire_name" | "broodmare_sire_name", names: string[]): Record<string, unknown> {
@@ -192,6 +195,7 @@ export function renderRunnerStats(input: {
   broodmareSires: Map<string, NameStat>;
   jockeys: Map<string, NameStat>;
   minCount: number;
+  courseSide?: CourseSideState | null;
   failure?: string | null;
 }): { text: string; gaps: string[] } {
   if (input.failure) {
@@ -214,6 +218,7 @@ export function renderRunnerStats(input: {
   const lines = [
     RUNNER_STATS_HEADING,
     `条件: ${input.venue} ${input.surface} ${input.distance}m`,
+    ...runnerSideLines(input.courseSide),
     `期間: ${input.period.from}〜${input.period.to}（レース日の前日までの過去${input.periodYears}年）`,
   ];
   if (input.dataThrough) lines.push(`確定済みデータは ${input.dataThrough} まで。`);
@@ -243,6 +248,7 @@ export async function collectRunnerStats(input: {
   minCount: number;
   now: string;
   callLimit?: number;
+  courseSide?: CourseSideState | null;
 }): Promise<RunnerStatsResult> {
   const horses = runnerHorses(input.entries);
   let period: { from: string; to: string };
@@ -258,6 +264,7 @@ export async function collectRunnerStats(input: {
     distance: input.distance,
     period,
     periodYears: input.periodYears,
+    courseSide: input.courseSide ?? null,
   };
   if (!SURFACES.has(input.surface)) {
     return finish(view, input.minCount, emptyMaps(), meta(), 0, 0, `馬場種類「${input.surface}」は 芝・ダート・障害 のどれでもありません`);
@@ -269,12 +276,24 @@ export async function collectRunnerStats(input: {
     return finish(view, input.minCount, emptyMaps(), meta(), 0, 0, null);
   }
   try {
-    assertRunnerStatsShape(input.catalog, { ...view });
+    assertRunnerStatsShape(input.catalog, {
+      venue: view.venue,
+      surface: view.surface,
+      distance: view.distance,
+      period: view.period,
+      sideFilter: view.courseSide?.statsFilter ?? null,
+    });
   } catch (err) {
     return failed(horses, { ...input, ...view }, err);
   }
   const budget: Budget = { used: 0, limit: input.callLimit ?? RUNNER_STATS_CALL_LIMIT };
-  const course: CourseWindow = view;
+  const course: CourseWindow = {
+    venue: view.venue,
+    surface: view.surface,
+    distance: view.distance,
+    period: view.period,
+    sideFilter: view.courseSide?.statsFilter ?? null,
+  };
   const collected = meta();
   try {
     const pedigree = await fetchPedigree(input.bashira, input.catalog, course, horses, budget, collected);
@@ -341,6 +360,7 @@ function finish(
     distance: number;
     period: { from: string; to: string };
     periodYears: number;
+    courseSide?: CourseSideState | null;
   },
   minCount: number,
   maps: { sires: Map<string, NameStat>; broodmareSires: Map<string, NameStat>; jockeys: Map<string, NameStat> },
@@ -369,6 +389,7 @@ function finish(
 
 function assertRunnerStatsShape(catalog: ToolCatalog, course: CourseWindow): void {
   assertFields(catalog, "get_stats", REQUIRED_FIELDS);
+  if (course.sideFilter) assertFields(catalog, "get_stats", ["course_side"]);
   assertToolArgs(catalog, "get_stats", pedigreeStatsArgs(course, "sire_name", ["名"]));
   assertToolArgs(catalog, "get_stats", pedigreeStatsArgs(course, "broodmare_sire_name", ["名"]));
   assertToolArgs(catalog, "get_stats", jockeyStatsArgs(course, "名"));
@@ -853,12 +874,20 @@ function horseLabel(horse: RunnerHorse): string {
 }
 
 function courseFilters(course: CourseWindow): Record<string, unknown> {
-  return {
-    race_track: course.venue,
-    surface: course.surface,
-    distance: course.distance,
-    race_meeting_date: { gte: course.period.from, lte: course.period.to },
-  };
+  return withCourseSideFilter(
+    {
+      race_track: course.venue,
+      surface: course.surface,
+      distance: course.distance,
+      race_meeting_date: { gte: course.period.from, lte: course.period.to },
+    },
+    course.sideFilter,
+  );
+}
+
+function runnerSideLines(state: CourseSideState | null | undefined): string[] {
+  if (!state?.side) return [];
+  return [courseSideScopeLine(state.side, state.statsFilter != null)];
 }
 
 function uniqueNames(values: Array<string | null>): string[] {

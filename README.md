@@ -24,7 +24,7 @@
 2. Consumer は、1 つの配送でメッセージを 1 件進める（`max_batch_size` は 1）。別レースは同時に 3 件まで進む（`max_concurrency`）。段階は、出走と馬場の収集、馬ごとの近走、コース集計、Gemini、Notion への書き込みです。
 3. 同じレースを再実行するときは、前の BASHIRA ページをアーカイブし、同じ書式で新しいページを作ります。
 
-段階の分割、外部呼び出しの上限、同じレースのロックは [docs/pipeline.md](docs/pipeline.md) に書いてあります。枠・4角・馬場状態のコース集計（`get_stats` のキャッシュ）は、コース分析にもレース予想にも渡しません。コース分析には、別に計算したコースデータ要約を渡します。レース予想には、父・母の父・騎手のこのコースの成績を `{{runner_stats}}` で渡します。3歳未勝利（芝またはダート。G1、G2、G3、L とオープンは除く）では、race の system にマーカー `<!-- input:race_level -->` があるときだけ、馬柱の末尾に過去最高レースレベルを足します。値は共有マシンが `APP_KV` に書いた `c1:v1:meta` と `c1:v1:feat:{asof}` を読むだけで、この Worker は計算も書き込みもしません。マーカーが無いプロンプトには足しません。差し込み名は [docs/prompts.md](docs/prompts.md)、集計の中身は [docs/course-odds.md](docs/course-odds.md) です。
+段階の分割、外部呼び出しの上限、同じレースのロックは [docs/pipeline.md](docs/pipeline.md) に書いてあります。枠・4角・馬場状態のコース集計（`get_stats` のキャッシュ）は、コース分析にもレース予想にも渡しません。コース分析には、別に計算したコースデータ要約を渡します。レース予想には、父・母の父・騎手のこのコースの成績を `{{runner_stats}}` で渡します。`course_side` が `内`、`外`、`外→内`、`内→外` のときは、その回りだけを集計します。`なし` は絞りません。3歳未勝利（芝またはダート。G1、G2、G3、L とオープンは除く）では、race の system にマーカー `<!-- input:race_level -->` があるときだけ、馬柱の末尾に過去最高レースレベルを足します。値は共有マシンが `APP_KV` に書いた `c1:v1:meta` と `c1:v1:feat:{asof}` を読むだけで、この Worker は計算も書き込みもしません。マーカーが無いプロンプトには足しません。差し込み名は [docs/prompts.md](docs/prompts.md)、集計の中身は [docs/course-odds.md](docs/course-odds.md) です。
 
 プロンプト本文を KV へ入れる手順は、このリポジトリにはありません。Worker が読むのは、KV に入っている `{"version","system","user"}` だけです。差し込み名は [docs/prompts.md](docs/prompts.md) です。
 

@@ -4,6 +4,7 @@ import { chunkChildren } from "./notion-blocks";
 import { ExternalBudget } from "./budget";
 import { notifyRaceFailed, type NotifyConfig } from "./notify";
 import { collectCourseSummary, courseSummaryText, failedCourseSummary } from "./course-summary";
+import { courseSideFromCatalog, courseSideLead, unresolvedCourseSide, type CourseSideState } from "./course-side";
 import { composeRemarks, fillCourseUser, fillRaceUser, mergeGoing } from "./dify-input";
 import { readRacePrediction } from "./extract-prediction";
 import { checkPredictionConsistency } from "./consistency";
@@ -117,6 +118,9 @@ const RACE_COLUMNS = [
   "post_time",
   "odds_observed_at",
 ];
+
+/** get_races の列。tools/list に無いときは外し、ジョブは止めない。 */
+const OPTIONAL_RACE_COLUMNS = ["course_side"] as const;
 
 const ENTRY_COLUMNS = [
   "horse_number",
@@ -312,7 +316,7 @@ async function collect(message: Extract<JobMessage, { kind: "start" }>, deps: Pi
       race_track: message.race.venue,
       race_number: message.race.raceNumber,
     },
-    columns: RACE_COLUMNS,
+    columns: selectColumns(catalog, "get_races", RACE_COLUMNS, OPTIONAL_RACE_COLUMNS),
     limit: 5,
   };
   assertToolArgs(catalog, "get_races", raceArgs);
@@ -366,6 +370,7 @@ async function collect(message: Extract<JobMessage, { kind: "start" }>, deps: Pi
   });
   const active = entries.filter((row) => !SCRATCHED.has(stringField(row, "race_abnormality") ?? ""));
   const formTasks = buildFormTasks(active, message.race, catalog);
+  const courseSide = courseSideFromCatalog(raceRow, catalog);
   const tasks = buildStatTasks(
     {
       venue: message.race.venue,
@@ -377,6 +382,7 @@ async function collect(message: Extract<JobMessage, { kind: "start" }>, deps: Pi
       sires: uniqueNames(active, "sire_name"),
       broodmareSires: uniqueNames(active, "broodmare_sire_name"),
       jockeys: uniqueNames(active, "jockey_name"),
+      sideFilter: courseSide.statsFilter,
     },
     catalog,
   );
@@ -514,33 +520,52 @@ async function runStats(state: JobState, deps: PipelineDeps): Promise<void> {
   await enqueuePhase(state, deps);
 }
 
+interface CourseSummaryPrep {
+  record: NonNullable<JobState["courseSummary"]>;
+  side: CourseSideState;
+  /** tools/list まで進み、回りの値を決めた。 */
+  resolved: boolean;
+}
+
 /** 集計の失敗は予想を止めない。理由はジョブに残し、差し込みは「要約なし」にする。 */
 async function safeCourseSummary(
   state: JobState,
   deps: PipelineDeps,
   surface: string | null,
   distance: number | null,
-): Promise<JobState["courseSummary"]> {
+): Promise<CourseSummaryPrep> {
+  const unresolved = unresolvedCourseSide();
   if (!surface || distance == null) {
-    return failedCourseSummary("レースの馬場種類または距離が無いため、コースデータ要約を作れません");
+    return {
+      record: failedCourseSummary("レースの馬場種類または距離が無いため、コースデータ要約を作れません"),
+      side: unresolved,
+      resolved: false,
+    };
   }
+  let side = unresolved;
+  let resolved = false;
   try {
     const listed = await deps.bashira.listTools();
     if (!listed.ok) throw new JobError(listed.message, false);
-    return await collectCourseSummary({
+    const catalog = catalogFromTools(listed.tools);
+    side = courseSideFromCatalog(state.raceRow, catalog);
+    resolved = true;
+    const record = await collectCourseSummary({
       bashira: deps.bashira,
-      catalog: catalogFromTools(listed.tools),
+      catalog,
       venue: state.race.venue,
       surface,
       distance,
       raceDate: state.race.date,
       periodYears: deps.config.statsPeriodYears,
       minCount: deps.config.courseSummaryMinCount,
+      courseSide: side,
     });
+    return { record, side, resolved };
   } catch (err) {
     const message = errorMessage(err);
     deps.log?.("course_summary_failed", { raceKey: state.race.raceKey, error: message });
-    return failedCourseSummary(message);
+    return { record: failedCourseSummary(message), side, resolved };
   }
 }
 
@@ -553,7 +578,15 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
     const racePrompt = await loadPrompt(deps.kv, "race");
     const surface = state.raceRow ? stringField(state.raceRow, "surface") : null;
     const distance = state.raceRow ? numberField(state.raceRow, "distance") : null;
-    if (!state.courseSummary) state.courseSummary = await safeCourseSummary(state, deps, surface, distance);
+    let courseSide = unresolvedCourseSide();
+    let courseSideReady = false;
+    if (!state.courseSummary) {
+      const prepared = await safeCourseSummary(state, deps, surface, distance);
+      state.courseSummary = prepared.record;
+      courseSide = prepared.side;
+      courseSideReady = prepared.resolved;
+    }
+    if (!courseSideReady) courseSide = await readCourseSide(state, deps);
     const going = mergeGoing({ raceRow: state.raceRow, baba: state.baba, surface });
     const course = await generateText({
       apiKey: deps.config.geminiApiKey,
@@ -567,6 +600,8 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
         surface: surface ?? "不明",
         distance: distance == null ? "不明" : String(distance),
         course_summary: courseSummaryText(state.courseSummary),
+        course_side: courseSide.side ?? "",
+        courseSideLead: courseSideLead(courseSide),
       }),
     });
     state.gemini = { ...state.gemini, course: courseCallRecord(course) };
@@ -592,12 +627,12 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
     const current = surface && distance != null ? { track: state.race.venue, surface, distance } : null;
     const related = strippedCourse.parse.status === "ok" ? strippedCourse.parse.courses : null;
     const courseRecords = renderCourseRecords({ race: state.race, horses, rows: performance.rows, current, related });
-    const runner = await loadRunnerStats(state, deps, surface, distance, performance.catalog);
+    const runner = await loadRunnerStats(state, deps, surface, distance, performance.catalog, courseSide);
     const renderedUmabashira = renderUmabashira({ race: state.race, entries: state.entries, formTasks: state.formTasks ?? [] });
     const raceLevel = await loadRaceLevel(deps.kv, state.raceRow, state.entries, state.race.date, racePrompt.system);
     const umabashira = raceLevel.text === "" ? renderedUmabashira : `${renderedUmabashira}\n\n${raceLevel.text}`;
     const snapshots = horseFormSnapshots(state.entries, state.formTasks ?? []);
-    const facts = buildRaceFacts({ raceRow: state.raceRow, entries: state.entries });
+    const facts = buildRaceFacts({ raceRow: state.raceRow, entries: state.entries, courseSide });
     state.raceInputGaps = [...facts.gaps, ...horseFactGaps(state.entries)];
     if (relatedGap) state.raceInputGaps.push(relatedGap);
     state.raceInputGaps.push(...performance.gaps, ...runner.gaps, ...raceLevel.gaps);
@@ -727,15 +762,26 @@ async function loadRacePastPerformance(state: JobState, deps: PipelineDeps, hors
 
 /**
  * 父・母の父は配列で各 1 回（曖昧なら生年付きでもう 1 回）。
- * 騎手は KV（コース × 騎手 × data_version）を読み、無いときだけ get_stats する。
+ * 騎手は KV（コース × 絞った回り × 騎手 × data_version）を読み、無いときだけ get_stats する。
  * 失敗しても予想は止めない。
  */
+async function readCourseSide(state: JobState, deps: PipelineDeps): Promise<CourseSideState> {
+  try {
+    const listed = await deps.bashira.listTools();
+    if (!listed.ok) return unresolvedCourseSide();
+    return courseSideFromCatalog(state.raceRow, catalogFromTools(listed.tools));
+  } catch {
+    return unresolvedCourseSide();
+  }
+}
+
 async function loadRunnerStats(
   state: JobState,
   deps: PipelineDeps,
   surface: string | null,
   distance: number | null,
   catalog: ToolCatalog | null,
+  courseSide: CourseSideState,
 ): Promise<{ text: string; gaps: string[] }> {
   if (!surface || distance == null) {
     return {
@@ -766,6 +812,7 @@ async function loadRunnerStats(
     periodYears: deps.config.statsPeriodYears,
     minCount: deps.config.courseSummaryMinCount,
     now: deps.now().toISOString(),
+    courseSide,
   });
   deps.log?.("runner_stats_fetch", {
     raceKey: state.race.raceKey,

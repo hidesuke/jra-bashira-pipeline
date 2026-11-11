@@ -1,5 +1,6 @@
 import { ambiguousNameMessage } from "./bashira/mcp";
 import type { BashiraPort } from "./bashira/port";
+import { courseSideScopeLine, withCourseSideFilter, type CourseSideState } from "./course-side";
 import { numberField, rowsToObjects, stringField } from "./rows";
 import { assertFields, assertToolArgs, type ToolCatalog } from "./schema";
 import { JobError, STATS_BATCH_SIZE } from "./types";
@@ -108,19 +109,24 @@ export function buildCourseSummaryPlan(input: {
   distance: number;
   raceDate: string;
   periodYears: number;
+  /** 省略時は回りで絞らない。 */
+  courseSide?: CourseSideState | null;
 }): CourseSummaryPlan {
   assertFields(input.catalog, "get_stats", SUMMARY_FIELDS);
   assertFields(input.catalog, "get_races", RACE_COUNT_FIELDS);
   if (!SURFACES.has(input.surface)) {
     throw new JobError(`馬場種類「${input.surface}」は 芝・ダート・障害 のどれでもありません`, false);
   }
+  if (input.courseSide?.statsFilter) assertFields(input.catalog, "get_stats", ["course_side"]);
+  if (input.courseSide?.racesFilter) assertFields(input.catalog, "get_races", ["course_side"]);
   const period = courseSummaryPeriod(input.raceDate, input.periodYears);
-  const base = {
+  const window = {
     race_track: input.venue,
     surface: input.surface,
     distance: input.distance,
     race_meeting_date: { gte: period.from, lte: period.to },
   };
+  const base = withCourseSideFilter(window, input.courseSide?.statsFilter);
   const stats: CourseSummaryQuery[] = [
     { id: "totals", args: { metrics: WINS_AND_TOP3, filters: base } },
     ...CORNER_BUCKETS.map((bucket) => ({
@@ -158,7 +164,7 @@ export function buildCourseSummaryPlan(input: {
   }
   for (const stat of stats) assertToolArgs(input.catalog, "get_stats", stat.args);
   const races = {
-    filters: { ...base, race_status: "finished" },
+    filters: withCourseSideFilter({ ...window, race_status: "finished" }, input.courseSide?.racesFilter),
     columns: ["race_id", "race_status"],
     limit: COURSE_RACE_COUNT_LIMIT,
   };
@@ -176,6 +182,7 @@ export async function collectCourseSummary(input: {
   raceDate: string;
   periodYears: number;
   minCount: number;
+  courseSide?: CourseSideState | null;
 }): Promise<CourseSummaryRecord> {
   const plan = buildCourseSummaryPlan(input);
   const statsCall = await input.bashira.callTools(plan.stats.map((stat) => ({ name: "get_stats", args: stat.args })));
@@ -204,6 +211,7 @@ export async function collectCourseSummary(input: {
     payloads,
     racesPayload: racesCall.data,
     minCount: input.minCount,
+    courseSide: input.courseSide,
   });
   return {
     status: "ok",
@@ -225,6 +233,7 @@ export function renderCourseSummary(input: {
   payloads: Record<string, unknown>;
   racesPayload: unknown;
   minCount: number;
+  courseSide?: CourseSideState | null;
 }): { text: string; raceCount: number; raceCountTruncated: boolean } {
   if (!Number.isInteger(input.minCount) || input.minCount <= 0) {
     throw new JobError("コースデータ要約の件数の下限が正の整数ではありません", false);
@@ -262,6 +271,7 @@ export function renderCourseSummary(input: {
   const lines = [
     "コースデータ要約",
     `条件: ${input.venue} ${input.surface} ${input.distance}m`,
+    ...courseSideLines(input.courseSide),
     `期間: ${input.period.from}〜${input.period.to}（レース日の前日までの過去${input.periodYears}年）`,
     `レース数: ${raceCountLabel(races)}${raceNote}`,
     `出走数: ${totals.starts}　勝ち数: ${totals.wins}`,
@@ -308,6 +318,13 @@ export function renderCourseSummary(input: {
 export function formatRate(numerator: number, denominator: number): string {
   if (denominator <= 0) return "—";
   return `${(Math.round((numerator * 1000) / denominator) / 10).toFixed(1)}%`;
+}
+
+function courseSideLines(state: CourseSideState | null | undefined): string[] {
+  if (!state?.side) return [];
+  const lines = [courseSideScopeLine(state.side, state.statsFilter != null)];
+  if (state.statsFilter && !state.racesFilter) lines.push("レース数は回りで絞れていない。");
+  return lines;
 }
 
 function shareLine(label: string, count: number, total: number, minCount: number): string {

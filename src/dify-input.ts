@@ -68,12 +68,17 @@ function leadingBlocks(template: string, values: RaceUserValues): string[] {
   });
 }
 
-/** コース特徴ユーザー文。競馬場・芝/ダート/障害・距離と、コードで計算したコースデータ要約。 */
+/**
+ * コース特徴ユーザー文。競馬場・芝/ダート/障害・距離と、コードで計算したコースデータ要約。
+ * `course_side` は BASHIRA の値（内、外、外→内、内→外、なし）。無いときは空。
+ * user に {{course_side}} が無いときは、値が分かるときだけ courseSideLead を先頭へ足す。
+ */
 export const COURSE_USER_PLACEHOLDERS = {
   venue: "{{venue}}",
   surface: "{{surface}}",
   distance: "{{distance}}",
   course_summary: "{{course_summary}}",
+  course_side: "{{course_side}}",
 } as const;
 
 /** 移行期間の Dify ノード ID。course は競馬場、type は馬場種類。 */
@@ -85,15 +90,31 @@ export const COURSE_USER_DIFY_TOKENS = {
 
 export function fillCourseUser(
   template: string,
-  values: { venue: string; surface: string; distance: string; course_summary: string },
+  values: {
+    venue: string;
+    surface: string;
+    distance: string;
+    course_summary: string;
+    /** 省略時は空。プロンプトに {{course_side}} があるとき、その位置へ入る。 */
+    course_side?: string;
+    /** {{course_side}} が無いプロンプトの先頭へ足す文。空なら足さない。 */
+    courseSideLead?: string;
+  },
 ): string {
-  return fillPlaceholders(
+  const message = "コース特徴のユーザー文に未置換の差し込み（{{）が残っています";
+  const filled = fillPlaceholders(
     template,
     COURSE_USER_PLACEHOLDERS,
     COURSE_USER_DIFY_TOKENS,
-    values,
-    "コース特徴のユーザー文に未置換の差し込み（{{）が残っています",
+    { ...values, course_side: values.course_side ?? "" },
+    message,
   );
+  if (template.includes(COURSE_USER_PLACEHOLDERS.course_side)) return filled;
+  const lead = values.courseSideLead?.trim() ?? "";
+  if (!lead) return filled;
+  const text = `${lead}\n\n${filled}`;
+  if (text.includes("{{")) throw new JobError(message, false);
+  return text;
 }
 
 function fillPlaceholders(

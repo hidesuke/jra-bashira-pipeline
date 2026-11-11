@@ -12,6 +12,7 @@ import {
   formatRate,
   renderCourseSummary,
 } from "../src/course-summary";
+import { resolveCourseSide } from "../src/course-side";
 import { catalogFromTools } from "../src/schema";
 import { STATS_BATCH_SIZE } from "../src/types";
 import { bashiraTools, tool } from "./fixture";
@@ -106,6 +107,60 @@ describe("course summary queries", () => {
       limit: COURSE_RACE_COUNT_LIMIT,
       filters: { race_status: "finished", distance: 1800 },
     });
+    expect(JSON.stringify(plan)).not.toContain("course_side");
+  });
+
+  it("keeps only the same course_side, and does not filter なし", () => {
+    const outer = resolveCourseSide({ raw: "外", raceField: true, statsField: true, racesField: true });
+    const filtered = buildCourseSummaryPlan({
+      catalog,
+      venue: "京都",
+      surface: "芝",
+      distance: 1600,
+      raceDate: "2026-11-08",
+      periodYears: 5,
+      courseSide: outer,
+    });
+    for (const stat of filtered.stats) {
+      expect(stat.args.filters).toMatchObject({ course_side: "外", distance: 1600 });
+    }
+    expect(filtered.races.filters).toMatchObject({ course_side: "外", race_status: "finished" });
+    const switching = resolveCourseSide({ raw: "外→内", raceField: true, statsField: true, racesField: true });
+    const switched = buildCourseSummaryPlan({
+      catalog,
+      venue: "京都",
+      surface: "芝",
+      distance: 1600,
+      raceDate: "2026-11-08",
+      periodYears: 5,
+      courseSide: switching,
+    });
+    expect((switched.stats[0]?.args.filters as { course_side?: string }).course_side).toBe("外→内");
+    const plain = resolveCourseSide({ raw: "なし", raceField: true, statsField: true, racesField: true });
+    const unfiltered = buildCourseSummaryPlan({
+      catalog,
+      venue: "東京",
+      surface: "芝",
+      distance: 1600,
+      raceDate: "2026-11-08",
+      periodYears: 5,
+      courseSide: plain,
+    });
+    expect(JSON.stringify(unfiltered)).not.toContain("course_side");
+    const rendered = renderCourseSummary({
+      venue: "京都",
+      surface: "芝",
+      distance: 1600,
+      period: { from: "2021-11-07", to: "2026-11-07" },
+      periodYears: 5,
+      payloads: kyotoPayloads,
+      racesPayload: finishedRaces(12),
+      minCount: 30,
+      courseSide: outer,
+    });
+    expect(rendered.text).toContain("条件: 京都 芝 1600m\n回り: 外（この回りだけを集計。母数が少なくても内と外は混ぜない）");
+    expect(rendered.text).toContain("レース数: 12 開催が少ないため参考値");
+    expect(rendered.text).toContain("勝ち数: 436");
   });
 
   it("does not call when the live schema lacks a field", () => {

@@ -31,6 +31,7 @@ const RACE_FIELDS = [
   "weight_type",
   "post_time",
   "odds_observed_at",
+  "course_side",
   "first_3f_sec",
   "last_3f_sec",
 ];
@@ -103,6 +104,7 @@ const STAT_FIELDS = [
   "win_payout",
   "race_meeting_date",
   "is_fastest_last_3f",
+  "course_side",
   "dimensions",
   "metrics",
   "filters",

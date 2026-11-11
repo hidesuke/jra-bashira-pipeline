@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BashiraPort } from "../src/bashira/port";
+import { resolveCourseSide } from "../src/course-side";
 import { catalogFromTools } from "../src/schema";
 import { MemoryKv } from "../src/kv";
 import {
@@ -262,6 +263,38 @@ describe("runner stats", () => {
     expect(second.cacheHits).toBe(1);
     expect(second.text).toContain("騎手 騎手A: 出走 40");
     expect(second.calls).toBe(2);
+  });
+
+  it("filters pedigree and jockey stats to the same course_side and keeps なし on the old cache key", async () => {
+    const kv = new MemoryKv();
+    const bashira = port((args) => {
+      const filters = args.filters as Record<string, unknown>;
+      if ("jockey_name" in filters) return jockeyRow(String(filters.jockey_name), 4, 1, 2);
+      if ("sire_name" in filters) return grouped("sire_name", namesOf(filters.sire_name).map((name) => [name, 48, 8, 20]));
+      return grouped("broodmare_sire_name", namesOf(filters.broodmare_sire_name).map((name) => [name, 40, 4, 10]));
+    });
+    const entries = [{ horse_number: 1, horse_name: "ア", sire_name: "父一", broodmare_sire_name: "母父一", jockey_name: "騎手A" }];
+    const outer = resolveCourseSide({ raw: "外", raceField: true, statsField: true, racesField: true });
+    const result = await collectRunnerStats({ ...baseInput, bashira, kv, entries, courseSide: outer });
+    expect(bashira.calls.every((args) => (args.filters as { course_side?: string }).course_side === "外")).toBe(true);
+    expect(result.text).toContain("回り: 外（この回りだけを集計。母数が少なくても内と外は混ぜない）");
+    expect(result.text).toContain("件数が少ないため参考値");
+    const filteredKey = jockeyCourseCacheKey({ ...course, sideFilter: "外", dataVersion: "20261108T091910Z", jockey: "騎手A" });
+    const plainKey = jockeyCourseCacheKey({ ...course, dataVersion: "20261108T091910Z", jockey: "騎手A" });
+    expect(filteredKey).not.toBe(plainKey);
+    expect(await kv.get(filteredKey)).toContain("騎手A");
+    expect(await kv.get(plainKey)).toBeNull();
+    const none = resolveCourseSide({ raw: "なし", raceField: true, statsField: true, racesField: true });
+    const again = port((args) => {
+      const filters = args.filters as Record<string, unknown>;
+      if ("jockey_name" in filters) return jockeyRow(String(filters.jockey_name));
+      if ("sire_name" in filters) return grouped("sire_name", namesOf(filters.sire_name).map((name) => [name, 40, 4, 10]));
+      return grouped("broodmare_sire_name", namesOf(filters.broodmare_sire_name).map((name) => [name, 40, 4, 10]));
+    });
+    const plain = await collectRunnerStats({ ...baseInput, bashira: again, kv: new MemoryKv(), entries, courseSide: none });
+    expect(again.calls.every((args) => !("course_side" in (args.filters as object)))).toBe(true);
+    expect(plain.text).toContain("回り: なし（内外の印は無い。集計は絞らない）");
+    expect(jockeyCourseCacheKey({ ...course, sideFilter: none.statsFilter, dataVersion: "20261108T091910Z", jockey: "騎手A" })).toBe(plainKey);
   });
 
   it("passes what fits in the call limit and records the rest", async () => {

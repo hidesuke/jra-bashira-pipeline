@@ -70,7 +70,7 @@ Dify 版と同じ開催日、競馬場、レース番号のページがあって
 
 ## フッター
 
-`BASHIRAで取得`、実行者、`course_variant: null`、オッズ種別、オッズ観測時刻、指定モデル、応答の `modelVersion`、プロンプト版は本文の先頭には置きません。末尾の灰色段落に書きます。`modelVersion` が無いときは「応答に modelVersion が無い」と書きます。オッズの詳細文があるときは、その行も足します。
+`BASHIRAで取得`、実行者、`course_variant: null`、オッズ種別、オッズ観測時刻、指定モデル、応答の `modelVersion`、プロンプト版は本文の先頭には置きません。末尾の灰色段落に書きます。`modelVersion` が無いときは「応答に modelVersion が無い」と書きます。オッズの詳細文があるときは、その行も足します。回りが取れるようになっても、このフッターの `course_variant: null（内・外コースのデータは無い）` は変えません。見出し、プロパティ、コースの A〜D 表記も変えません。
 
 `part.thought` が true の思考文と、`groundingMetadata` の検索引用は、本文にもフッターにも書きません。書式は上の並びのままです。検索クエリとトークン数はジョブに残り、`GET /admin/jobs` で見ます。見方は [admin.md](admin.md) です。
 
