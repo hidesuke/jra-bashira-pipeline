@@ -81,10 +81,13 @@ npx wrangler queues create jra-bashira-race-dlq
 | 外部サブリクエスト | 1 呼び出し 50 件 | `EXTERNAL_SUBREQUEST_LIMIT`。Worker は `EXTERNAL_BUDGET` の 45 件で分割する。通知の 1 件だけ、45 を使い切っていても 50 未満なら送る |
 | Cloudflare サービスへのサブリクエスト | 1 呼び出し 1,000 件 | KV、Queue、Durable Object のバインディング。この 1,000 は定数にしていない。外部 `fetch` の 45 件・40 件には数えない |
 | KV の書き込み | 別のキーへ 1 日 1,000。同じキーは 1 秒に 1 回 | ジョブは `JOB_WRITE_MIN_INTERVAL_MS`（1.1 秒）で間を空ける。429 は `KV_PUT_BACKOFF_MS`（1 秒、2 秒、4 秒）で待ってやり直す |
+| KV の読み取り | 1 日 100,000 | 3歳未勝利で race の system にマーカーがあるとき、predict は `c1:v1:meta` を 1 回読む。基準日が開催日の 9 日前から開催日前日までのときだけ `c1:v1:feat:{asof}` をもう 1 回読む。適用外、マーカーが無い、meta が無い・壊れている、基準日が範囲外のときは feat を読まず、適用外とマーカー無しは meta も読まない。書き込みは増やさない |
 | Queue の操作 | 1 日 10,000。64KB までの書き込み、読み取り、削除がそれぞれ 1 操作。1 メッセージの配送は、通常この 3 操作 | `max_batch_size` は 1。`max_concurrency` は 3。メッセージの保持は 24 時間で、Free プランでは変えられない。待ち行列 `jra-bashira-race-dlq` も Queue なので、同じ保持になる |
 | Durable Object の外部 `fetch` | 外部サブリクエストと同じく 1 回 50 件 | `DO_EXTERNAL_BUDGET` の 40 件で止める。40 は 1 回の呼び出しの予算で、1 日の合計ではない |
 
 Gemini の日次の呼び出し上限は、このリポジトリの定数にはありません。予想 1 件の `predict` は `streamGenerateContent` を 2 回（コース分析とレース予想）呼びます。
+
+過去最高レースレベルの KV 読み取りは、上の表の 0 回から 2 回です。外部 `fetch` の 45 件には数えません。キーの形は [pipeline.md](pipeline.md) です。Free プランの読み取り 100,000 は [KV の上限](https://developers.cloudflare.com/kv/platform/limits/) です。
 
 開催日の全レースを 3 並列で進めたとき、KV の 1 日の書き込み、Gemini の呼び出し、各呼び出しの Durable Object 40 件に収まるかは、まだ本番で見ていません。記録は [verification.md](verification.md) です。
 

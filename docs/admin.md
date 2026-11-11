@@ -290,6 +290,7 @@ curl -sS "https://<worker>/admin/inspect?date=2026-11-08" \
 | `course.output_text` | コース分析の全文。Notion で切り詰める前 |
 | `race_prediction.user_text` / `race_prediction.prompt_version` | レース予想のユーザー文とプロンプト版。ユーザー文にはレース情報、近10走、コース成績、出走馬のコース成績（父・母の父・騎手）が入る。`{{win_odds}}` はプロンプトに書いてあるときだけ |
 | `race_input_gaps` | その入力で空欄にした項目。予想の前は null |
+| `race_level` | 過去最高レースレベルの記録。`input:v1:{raceKey}` に無いときは `trace:v1:{raceKey}`。どちらにも無い古いジョブは null。`applied`、`reason`、`asof`、`dataThrough`、`featSha256`、`horses`、`missing`。マーカーが無いプロンプトは `reason` が `prompt_without_c1` で、馬柱にもユーザー文にも節は無い |
 | `race_prediction.output_text` | レース予想のモデル出力全文 |
 | `race_prediction.予想本文` | 保存した予想本文。見出しから読んだあとの本文 |
 | `finishReason` / `modelVersion` / `usageMetadata` | 呼び出しごと |

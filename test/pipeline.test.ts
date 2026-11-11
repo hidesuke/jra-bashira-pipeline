@@ -7,6 +7,7 @@ import { keys, MemoryKv } from "../src/kv";
 import { loadLlmTrace } from "../src/llm-trace";
 import { loadPredictInput } from "../src/predict-input";
 import { handleJobMessage, NOTION_CONTINUATION_LIMIT, type PipelineDeps } from "../src/pipeline";
+import { RACE_LEVEL_HEADING, RACE_LEVEL_MARKER } from "../src/race-level";
 import { QUEUE_MAX_RETRIES, type JobMessage, type RaceRef } from "../src/types";
 import { bashiraTools, notionSchema } from "./fixture";
 
@@ -57,6 +58,8 @@ function harness(options?: {
   /** レース予想の streamGenerateContent だけ 500 にする。 */
   failRaceGemini?: boolean;
   courseText?: string;
+  /** get_races の開催行に上書きする。 */
+  raceRow?: Record<string, unknown>;
   onEntries?: (args: Record<string, unknown>) => { ok: true; data: unknown } | null;
 }) {
   const kv = new MemoryKv();
@@ -127,6 +130,7 @@ function harness(options?: {
                 post_time: "15:30:00",
                 weather: "曇",
                 track_condition: "重",
+                ...options?.raceRow,
               },
             ],
           },
@@ -1258,13 +1262,174 @@ describe("pipeline", () => {
     expect(trace?.coursePromptVersion).toBe("v1");
     expect(trace?.racePromptVersion).toBe("v1");
     expect(trace?.raceWebSearchQueries).toEqual(["レースでは検索しない"]);
+    expect(trace?.raceLevel).toMatchObject({ applied: false, reason: "not_applicable", horses: [], missing: 0 });
     const raw = (await env.kv.get(keys.llmTrace(race.raceKey))) ?? "";
     expect(raw).not.toContain("コースシステム");
     expect(raw).not.toContain("予測システム");
+    expect(raw).not.toContain("過去最高レースレベル");
     const job = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
     expect(JSON.stringify(job.gemini?.race)).not.toContain("レースでは検索しない");
   });
+
+  it("leaves the race prompt unchanged when the system prompt has no race-level marker", async () => {
+    const env = harness({
+      raceRow: { race_type: "3歳", race_condition: "未勝利", grade: "平場", surface: "芝" },
+      onEntries: maidenCard,
+    });
+    await seedPrompts(env.kv);
+    await seedRaceLevel(env.kv, "2026-11-06");
+    const gets = spyGets(env.kv);
+    const results = await drain(env, { kind: "start", runId: "run-level-off", race, requestedBy: "Grok Bot" });
+    expect(results.every((result) => result === "ack")).toBe(true);
+    const prompt = racePromptOf(env.geminiBodies);
+    expect(prompt).toContain("# 馬柱");
+    expect(prompt).not.toContain("# 過去最高レースレベル");
+    expect(gets.filter((key) => key.startsWith("c1:"))).toEqual([]);
+    const stored = await loadPredictInput(env.kv, race.raceKey);
+    expect(stored?.raceLevel).toMatchObject({ applied: false, reason: "prompt_without_c1", horses: [], missing: 0 });
+    expect(stored?.umabashira).not.toContain("過去最高レースレベル");
+    const trace = await loadLlmTrace(env.kv, race.raceKey);
+    expect(trace?.raceLevel?.reason).toBe("prompt_without_c1");
+    expect(JSON.stringify(env.notionCalls)).not.toContain("過去最高レースレベル");
+  });
+
+  it("appends past max race level to the umabashira value for a 3yo maiden", async () => {
+    const env = harness({
+      raceRow: { race_type: "3歳", race_condition: "未勝利", grade: "平場", surface: "芝" },
+      onEntries: maidenCard,
+    });
+    await seedPrompts(env.kv);
+    const promptRaw = JSON.parse((await env.kv.get(keys.prompt("race"))) ?? "{}") as { system: string };
+    promptRaw.system = `予測システム\n${RACE_LEVEL_MARKER}`;
+    await env.kv.put(keys.prompt("race"), JSON.stringify(promptRaw));
+    await seedRaceLevel(env.kv, "2026-11-06");
+    const seeded = await c1Keys(env.kv);
+    const gets = spyGets(env.kv);
+    const results = await drain(env, { kind: "start", runId: "run-level-on", race, requestedBy: "Grok Bot" });
+    expect(results.every((result) => result === "ack")).toBe(true);
+    const prompt = racePromptOf(env.geminiBodies);
+    const section = prompt.slice(prompt.indexOf(RACE_LEVEL_HEADING));
+    expect(section.startsWith(RACE_LEVEL_HEADING)).toBe(true);
+    expect(section).toContain(`1 ア: ${RACE_LEVEL_DISPLAY}`);
+    expect(section).toContain("3 ウ: 過去最高レースレベル 不明");
+    expect(section).toContain("（基準: 確定データ 2026-11-05 まで）");
+    expect(section).not.toContain("イ");
+    expect(section).not.toContain("1 ア: 2.2");
+    expect(gets.filter((key) => key.startsWith("c1:")).sort()).toEqual(["c1:v1:feat:2026-11-06", "c1:v1:meta"]);
+    expect(await c1Keys(env.kv)).toEqual(seeded);
+    const stored = await loadPredictInput(env.kv, race.raceKey);
+    expect(stored?.umabashira).toContain(RACE_LEVEL_HEADING);
+    expect(stored?.raceLevel).toMatchObject({
+      applied: true,
+      reason: null,
+      asof: "2026-11-06",
+      dataThrough: "2026-11-05",
+      featSha256: RACE_LEVEL_SHA,
+      missing: 1,
+    });
+    expect(stored?.raceLevel?.horses.map((horse) => horse.horseName)).toEqual(["ア", "ウ"]);
+    expect(JSON.stringify(stored?.raceLevel)).not.toContain("source");
+    const trace = await loadLlmTrace(env.kv, race.raceKey);
+    expect(trace?.raceLevel).toEqual(stored?.raceLevel);
+    expect((await env.kv.get(keys.llmTrace(race.raceKey))) ?? "").not.toContain(RACE_LEVEL_MARKER);
+    expect(JSON.stringify(env.notionCalls)).not.toContain("過去最高レースレベル");
+  });
 });
+
+const RACE_LEVEL_SHA = "ab".repeat(32);
+const RACE_LEVEL_DISPLAY = "過去最高レースレベル 2.200（該当：2024-12-15 京都 G1 朝日杯フューチュリティステークス 2着）";
+
+function maidenCard(args: Record<string, unknown>): { ok: true; data: unknown } | null {
+  const filters = (args.filters ?? {}) as { horse_name?: unknown };
+  if (filters.horse_name != null) return null;
+  return {
+    ok: true,
+    data: {
+      rows: [
+        {
+          horse_number: 1,
+          horse_name: "ア",
+          birth_date: "2023-04-01T00:00:00Z",
+          jockey_name: "騎手A",
+          sire_name: "父一",
+          broodmare_sire_name: "母父一",
+          trainer_name: "調教師A",
+          trainer_east_west: "東",
+          horse_weight: 480,
+          horse_weight_difference_with_previous_race: 4,
+        },
+        {
+          horse_number: 2,
+          horse_name: "イ",
+          birth_date: "2023-05-02",
+          jockey_name: "騎手B",
+          sire_name: "父二",
+          broodmare_sire_name: "母父二",
+          race_abnormality: "出走取消",
+        },
+        {
+          horse_number: 3,
+          horse_name: "ウ",
+          birth_date: "2023-03-03",
+          jockey_name: "騎手C",
+          sire_name: "父三",
+          broodmare_sire_name: "母父三",
+          trainer_name: "調教師C",
+          trainer_east_west: "招待",
+          horse_weight: 470,
+        },
+      ],
+    },
+  };
+}
+
+async function seedRaceLevel(kv: MemoryKv, asof: string): Promise<void> {
+  await kv.put(
+    "c1:v1:meta",
+    JSON.stringify({
+      asof,
+      data_through: "2026-11-05",
+      data_version: "test",
+      built_at: "2026-11-06T00:00:00Z",
+      feat_key: `c1:v1:feat:${asof}`,
+      feat_sha256: RACE_LEVEL_SHA,
+      builder: "test",
+    }),
+  );
+  await kv.put(
+    `c1:v1:feat:${asof}`,
+    JSON.stringify({
+      asof,
+      horses: {
+        "ア|2023-04-01": { max_Sw: 2.2, missing: false, display: RACE_LEVEL_DISPLAY, source: { race_id: "do-not-copy" } },
+      },
+    }),
+  );
+  await kv.put("c1:v1:races", "{\"unread\":true}");
+}
+
+function spyGets(kv: MemoryKv): string[] {
+  const gets: string[] = [];
+  const original = kv.get.bind(kv);
+  kv.get = async (key: string) => {
+    gets.push(key);
+    return original(key);
+  };
+  return gets;
+}
+
+async function c1Keys(kv: MemoryKv): Promise<string[]> {
+  const listed = await kv.list({ prefix: "c1:" });
+  return listed.keys.map((key) => key.name).sort();
+}
+
+function racePromptOf(bodies: Array<Record<string, unknown>>): string {
+  for (const body of bodies) {
+    const text = (body.contents as Array<{ parts?: Array<{ text?: string }> }> | undefined)?.[0]?.parts?.[0]?.text ?? "";
+    if (text.includes("# 馬柱")) return text;
+  }
+  return "";
+}
 
 function notionReady(extra: Partial<JobState> = {}): JobState {
   return {

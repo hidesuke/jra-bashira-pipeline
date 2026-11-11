@@ -6,6 +6,7 @@ import { keys } from "./kv";
 import { loadLlmTrace, type LlmTrace } from "./llm-trace";
 import type { OddsSummary } from "./odds";
 import { loadPredictInput, type PredictInputRecord } from "./predict-input";
+import type { RaceLevelRecord } from "./race-level";
 import { numberField, stringField } from "./rows";
 import { errorMessage, JobError, type KvStore } from "./types";
 
@@ -140,6 +141,7 @@ export function buildInspectView(
     course_summary: summary.text,
     course_summary_error: summary.error,
     race_input_gaps: state.raceInputGaps ?? null,
+    race_level: stored?.raceLevel ?? trace?.raceLevel ?? null,
     warnings: (state.consistencyWarnings ?? []).map(warningView),
   };
 }
@@ -250,6 +252,10 @@ export function renderInspectMarkdown(view: InspectView): string {
     "### 呼び出し結果",
     "",
     callMarkdown(view.race_prediction),
+    "",
+    "### 過去最高レースレベル",
+    "",
+    raceLevelMarkdown(view.race_level),
     "",
     "## コースデータ要約",
     "",
@@ -498,6 +504,23 @@ function gapsMarkdown(gaps: string[] | null): string {
   return gaps.map((gap) => `- ${gap}`).join("\n");
 }
 
+function raceLevelMarkdown(record: RaceLevelRecord | null): string {
+  if (!record) return "保存されていません";
+  const lines = [
+    bullet("applied", record.applied),
+    bullet("reason", record.reason),
+    bullet("asof", record.asof),
+    bullet("data_through", record.dataThrough),
+    bullet("feat_sha256", record.featSha256),
+    bullet("missing", record.missing),
+  ];
+  const horses =
+    record.horses.length === 0
+      ? "（馬なし）"
+      : record.horses.map((horse) => `${horse.horseNumber ?? "?"} ${horse.horseName}: ${horse.display}`).join("\n");
+  return `${lines.join("\n")}\n${horses}`;
+}
+
 function textBlock(value: string | null): string {
   if (value == null) return "（保存されていません）";
   if (value === "") return "（空）";
@@ -610,6 +633,8 @@ export interface InspectView {
   course_summary_error: string | null;
   /** 予想の前は null。予想まで進んだジョブは空欄にした項目の配列。 */
   race_input_gaps: string[] | null;
+  /** input:v1 に無ければ trace:v1。どちらにも無ければ null。 */
+  race_level: RaceLevelRecord | null;
   warnings: Array<Record<string, unknown>>;
 }
 
