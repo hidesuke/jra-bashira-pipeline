@@ -1,5 +1,6 @@
 import { keys, kvGetJson } from "./kv";
 import { PREDICT_INPUT_CHUNK_CHARS, PREDICT_INPUT_MAX_CHARS } from "./predict-input";
+import { isRaceLevelRecord, type RaceLevelRecord } from "./race-level";
 import type { KvStore } from "./types";
 
 /**
@@ -27,6 +28,8 @@ export interface LlmTrace {
   raceOutput: string | null;
   /** レース予想の検索クエリ。未記録は null。空配列は記録済みで 0 件。 */
   raceWebSearchQueries: string[] | null;
+  /** 過去最高レースレベル。未記録は null。別キーには書かない。 */
+  raceLevel: RaceLevelRecord | null;
   truncated: boolean;
   incomplete: boolean;
 }
@@ -40,6 +43,7 @@ export interface LlmTracePatch {
   courseOutput?: string | null;
   raceOutput?: string | null;
   raceWebSearchQueries?: string[] | null;
+  raceLevel?: RaceLevelRecord | null;
 }
 
 interface TraceMeta {
@@ -53,6 +57,7 @@ interface TraceMeta {
   courseUser?: string;
   courseOutput?: string;
   raceOutput?: string;
+  raceLevel?: RaceLevelRecord;
   courseUserChunks?: number;
   courseOutputChunks?: number;
   raceOutputChunks?: number;
@@ -98,6 +103,8 @@ export async function saveLlmTrace(
       }
     }
   }
+  const raceLevel = pickRaceLevel(patch.raceLevel, previous?.raceLevel);
+  if (raceLevel) meta.raceLevel = raceLevel;
   await kv.put(keys.llmTrace(raceKey), JSON.stringify(meta));
   return { truncated };
 }
@@ -117,9 +124,19 @@ export async function loadLlmTrace(kv: KvStore, raceKey: string): Promise<LlmTra
     courseOutput: courseOutput.text,
     raceOutput: raceOutput.text,
     raceWebSearchQueries: cleanQueries(meta.raceWebSearchQueries ?? null),
+    raceLevel: isRaceLevelRecord(meta.raceLevel) ? meta.raceLevel : null,
     truncated: Boolean(meta.truncated),
     incomplete: courseUser.incomplete || courseOutput.incomplete || raceOutput.incomplete,
   };
+}
+
+function pickRaceLevel(
+  next: RaceLevelRecord | null | undefined,
+  previous: RaceLevelRecord | null | undefined,
+): RaceLevelRecord | null {
+  if (next === undefined) return isRaceLevelRecord(previous) ? previous : null;
+  if (next === null) return null;
+  return isRaceLevelRecord(next) ? next : isRaceLevelRecord(previous) ? previous : null;
 }
 
 function pick<T>(next: T | undefined, previous: T | null | undefined): T | null {

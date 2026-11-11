@@ -33,6 +33,7 @@ import { savePredictInput, type StoredRelatedCourses } from "./predict-input";
 import { careerHorses, loadPastPerformance, renderCourseRecords, renderPastRuns, renderRelatedCoursesLine, type CareerHorse } from "./past-runs";
 import { collectRunnerStats, RUNNER_STATS_HEADING } from "./runner-stats";
 import { buildRaceFacts } from "./race-facts";
+import { loadRaceLevel } from "./race-level";
 import { relatedCoursesGap, stripRelatedCourses } from "./related-courses";
 import { horseFactGaps, renderUmabashira } from "./umabashira";
 import type { BashiraPort } from "./bashira/port";
@@ -592,12 +593,14 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
     const related = strippedCourse.parse.status === "ok" ? strippedCourse.parse.courses : null;
     const courseRecords = renderCourseRecords({ race: state.race, horses, rows: performance.rows, current, related });
     const runner = await loadRunnerStats(state, deps, surface, distance, performance.catalog);
-    const umabashira = renderUmabashira({ race: state.race, entries: state.entries, formTasks: state.formTasks ?? [] });
+    const renderedUmabashira = renderUmabashira({ race: state.race, entries: state.entries, formTasks: state.formTasks ?? [] });
+    const raceLevel = await loadRaceLevel(deps.kv, state.raceRow, state.entries, state.race.date, racePrompt.system);
+    const umabashira = raceLevel.text === "" ? renderedUmabashira : `${renderedUmabashira}\n\n${raceLevel.text}`;
     const snapshots = horseFormSnapshots(state.entries, state.formTasks ?? []);
     const facts = buildRaceFacts({ raceRow: state.raceRow, entries: state.entries });
     state.raceInputGaps = [...facts.gaps, ...horseFactGaps(state.entries)];
     if (relatedGap) state.raceInputGaps.push(relatedGap);
-    state.raceInputGaps.push(...performance.gaps, ...runner.gaps);
+    state.raceInputGaps.push(...performance.gaps, ...runner.gaps, ...raceLevel.gaps);
     const raceInput = fillRaceUser(racePrompt.user, {
       race_facts: facts.text,
       umabashira,
@@ -627,6 +630,7 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
       courseRecords,
       relatedCourses,
       runnerStats: runner.text,
+      raceLevel: raceLevel.record,
     });
     state.predictInput = { stored: true, ...stored };
     const race = await generateText({
@@ -643,6 +647,7 @@ async function runPredict(state: JobState, deps: PipelineDeps): Promise<void> {
     await saveLlmTrace(deps.kv, state.race.raceKey, {
       raceOutput: race.text,
       raceWebSearchQueries: race.webSearchQueries,
+      raceLevel: raceLevel.record,
     });
     let raceText = race.text;
     let ticketCountCorrections: TicketCountCorrection[] = [];

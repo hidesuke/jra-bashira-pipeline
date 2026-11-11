@@ -1,5 +1,6 @@
 import type { HorseFormSnapshot } from "./form";
 import { keys, kvGetJson } from "./kv";
+import { isRaceLevelRecord, type RaceLevelRecord } from "./race-level";
 import type { KvStore } from "./types";
 
 /**
@@ -44,6 +45,8 @@ export interface PredictInputRecord {
   pastRunsState: StoredSectionState;
   courseRecordsState: StoredSectionState;
   runnerStatsState: StoredSectionState;
+  /** この変更より前の保存は null。プロンプト本文は入れない。 */
+  raceLevel: RaceLevelRecord | null;
 }
 
 interface StoredMeta {
@@ -65,6 +68,7 @@ interface StoredMeta {
   pastRunsChunks?: number;
   courseRecordsChunks?: number;
   runnerStatsChunks?: number;
+  raceLevel?: RaceLevelRecord;
 }
 
 type ChunkPart = "u" | "r" | "p" | "c" | "s";
@@ -86,6 +90,8 @@ export async function savePredictInput(
     /** 一次予想に渡した父・母の父・騎手のコース成績。プロンプト文は入れない。 */
     runnerStats?: string;
     relatedCourses?: StoredRelatedCourses;
+    /** 過去最高レースレベルの記録。別キーには書かない。 */
+    raceLevel?: RaceLevelRecord;
   },
 ): Promise<{ truncated: boolean; umabashiraBytes: number; raceInputBytes: number }> {
   const umabashira = clip(input.umabashira);
@@ -109,6 +115,7 @@ export async function savePredictInput(
   const savedAt = input.savedAt?.trim() ?? "";
   if (savedAt) meta.savedAt = savedAt;
   if (relatedCourses) meta.relatedCourses = relatedCourses;
+  if (isRaceLevelRecord(input.raceLevel)) meta.raceLevel = input.raceLevel;
   const inlinePayload: Record<string, unknown> = {
     umabashira: umabashira.text,
     raceInput: raceInput.text,
@@ -161,6 +168,7 @@ export async function loadPredictInput(kv: KvStore, raceKey: string): Promise<Pr
     courseRecords: courseRecordsState === "stored" ? courseRecords.text : null,
     runnerStats: runnerStatsState === "stored" ? runnerStats.text : null,
     relatedCourses: isStoredRelatedCourses(meta.relatedCourses) ? meta.relatedCourses : null,
+    raceLevel: isRaceLevelRecord(meta.raceLevel) ? meta.raceLevel : null,
     pastRunsState,
     courseRecordsState,
     runnerStatsState,
