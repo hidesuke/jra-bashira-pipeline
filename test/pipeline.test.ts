@@ -66,6 +66,7 @@ function harness(options?: {
   const pending: JobMessage[] = [];
   const statBatches: number[] = [];
   const entryCalls: Array<Record<string, unknown>> = [];
+  const bashiraCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const geminiBodies: Array<Record<string, unknown>> = [];
   const geminiUrls: string[] = [];
   const notionCalls: Array<{ method: string; path: string; body?: unknown }> = [];
@@ -86,6 +87,7 @@ function harness(options?: {
       return { ok: true, tools: bashiraTools };
     },
     async callTool(name, args) {
+      bashiraCalls.push({ name, args });
       if (name === "get_races") {
         const filters = (args.filters ?? {}) as { race_status?: string; race_id?: string | string[] };
         if (filters.race_id) {
@@ -236,6 +238,7 @@ function harness(options?: {
     },
     async callTools(calls) {
       statBatches.push(calls.length);
+      for (const call of calls) bashiraCalls.push({ name: call.name, args: call.args });
       if (calls.length > 0 && calls.every((call) => isRunnerStatsCall(call.args))) {
         return { ok: true, results: calls.map((call) => runnerStatsPayload(call.args)) };
       }
@@ -399,7 +402,7 @@ function harness(options?: {
       pending.push(message);
     },
   };
-  return { deps, kv, pending, statBatches, entryCalls, geminiBodies, geminiUrls, notionCalls, archivedIds, createdIds };
+  return { deps, kv, pending, statBatches, entryCalls, bashiraCalls, geminiBodies, geminiUrls, notionCalls, archivedIds, createdIds };
 }
 
 function geminiSse(payload: unknown): Response {
@@ -669,7 +672,7 @@ describe("pipeline", () => {
       expect.arrayContaining(["trainer_name", "trainer_east_west", "horse_weight", "horse_weight_difference_with_previous_race"]),
     );
     expect(job.raceInputGaps).toEqual([
-      "内外回り（BASHIRA に項目が無い）",
+      "内外回り（値が無い）",
       "仮柵（BASHIRA に項目が無い）",
       "2 イの馬体重",
       "関連コース（コース分析に一覧が無い）",
@@ -804,7 +807,7 @@ describe("pipeline", () => {
     expect(trace?.courseOutput).toContain("<<<related-courses>>>");
     const job = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
     expect(job.prediction?.courseText).toBe("コースは先行が残る");
-    expect(job.raceInputGaps).toEqual(["内外回り（BASHIRA に項目が無い）", "仮柵（BASHIRA に項目が無い）", "2 イの馬体重"]);
+    expect(job.raceInputGaps).toEqual(["内外回り（値が無い）", "仮柵（BASHIRA に項目が無い）", "2 イの馬体重"]);
     expect(env.entryCalls.filter((call) => call.limit === 500)).toHaveLength(1);
     const page = env.notionCalls.find((call) => call.method === "POST" && call.path === "/v1/pages");
     const body = JSON.stringify(page?.body);
@@ -884,6 +887,57 @@ describe("pipeline", () => {
     expect(job.courseSummary?.status).toBe("failed");
     expect(job.courseSummary?.text).toBeNull();
     expect(job.courseSummary?.error).toContain("course summary down");
+  });
+
+  it("uses course_side for the same-loop stats and leaves なし unfiltered", async () => {
+    const userOf = (body: Record<string, unknown> | undefined) =>
+      (body?.contents as Array<{ parts?: Array<{ text?: string }> }> | undefined)?.[0]?.parts?.[0]?.text ?? "";
+    const filtersOf = (args: Record<string, unknown>) => (args.filters ?? {}) as Record<string, unknown>;
+
+    const outer = harness({ raceRow: { course_side: "外" } });
+    await seedPrompts(outer.kv);
+    expect((await drain(outer, { kind: "start", runId: "run-outer", race, requestedBy: "Grok Bot" })).every((result) => result === "ack")).toBe(true);
+    const stats = outer.bashiraCalls.filter((call) => call.name === "get_stats");
+    expect(stats.length).toBeGreaterThan(0);
+    expect(stats.every((call) => filtersOf(call.args).course_side === "外")).toBe(true);
+    const counted = outer.bashiraCalls.filter((call) => call.name === "get_races" && filtersOf(call.args).race_status === "finished");
+    expect(counted.length).toBeGreaterThan(0);
+    expect(counted.every((call) => filtersOf(call.args).course_side === "外")).toBe(true);
+    const lookup = outer.bashiraCalls.find((call) => call.name === "get_races" && filtersOf(call.args).race_number != null);
+    expect(filtersOf(lookup?.args ?? {}).course_side).toBeUndefined();
+    const outerJob = JSON.parse((await outer.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(outerJob.courseVariant).toBeNull();
+    expect(outerJob.statTasks.every((task) => task.cacheKey.endsWith(":side:%E5%A4%96"))).toBe(true);
+    expect(outerJob.statTasks.every((task) => (task.args.filters as { course_side?: string }).course_side === "外")).toBe(true);
+    expect(outerJob.courseSummary?.text).toContain("回り: 外（この回りだけを集計。母数が少なくても内と外は混ぜない）");
+    const outerCourse = userOf(outer.geminiBodies[0]);
+    const outerRace = userOf(outer.geminiBodies[1]);
+    expect(outerCourse.startsWith("内外回り: 外\n")).toBe(true);
+    expect(outerCourse).toContain("回り: 外（この回りだけを集計。母数が少なくても内と外は混ぜない）");
+    expect(outerCourse).not.toContain("{{course_side}}");
+    expect(outerRace).toContain("内外回り: 外\n");
+    expect(outerRace).toContain("回り: 外（この回りだけを集計。母数が少なくても内と外は混ぜない）");
+    expect(outerJob.raceInputGaps).not.toContain("内外回り（値が無い）");
+    expect(outerJob.raceInputGaps).not.toContain("内外回り（BASHIRA に項目が無い）");
+    const outerPage = outer.notionCalls.find((call) => call.method === "POST" && call.path === "/v1/pages");
+    const outerBody = JSON.stringify(outerPage?.body);
+    expect(outerBody).toContain("course_variant: null（内・外コースのデータは無い）");
+    expect(outerBody).not.toContain("course_side");
+
+    const plain = harness({ raceRow: { course_side: "なし" } });
+    await seedPrompts(plain.kv);
+    expect((await drain(plain, { kind: "start", runId: "run-plain", race, requestedBy: "Grok Bot" })).every((result) => result === "ack")).toBe(true);
+    const plainStats = plain.bashiraCalls.filter((call) => call.name === "get_stats");
+    expect(plainStats.length).toBeGreaterThan(0);
+    expect(plainStats.every((call) => !("course_side" in filtersOf(call.args)))).toBe(true);
+    const plainJob = JSON.parse((await plain.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
+    expect(plainJob.statTasks.every((task) => !task.cacheKey.includes(":side:"))).toBe(true);
+    expect(plainJob.courseSummary?.text).toContain("回り: なし（内外の印は無い。集計は絞らない）");
+    expect(plainJob.courseSummary?.text).not.toContain("course_side");
+    expect(userOf(plain.geminiBodies[0])).toContain("内外回り: なし");
+    expect(userOf(plain.geminiBodies[1])).toContain("内外回り: なし");
+    const plainPage = plain.notionCalls.find((call) => call.method === "POST" && call.path === "/v1/pages");
+    expect(JSON.stringify(plainPage?.body)).toContain("course_variant: null（内・外コースのデータは無い）");
   });
 
   it("stops when BASHIRA refresh fails and does not call Gemini", async () => {

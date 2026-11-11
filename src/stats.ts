@@ -1,3 +1,4 @@
+import { courseSideKeySuffix, withCourseSideFilter, type CourseSide } from "./course-side";
 import { assertFields, assertToolArgs, type ToolCatalog } from "./schema";
 import { JobError, STATS_CACHE_TTL_SECONDS, type KvStore } from "./types";
 
@@ -38,6 +39,11 @@ export interface CourseContext {
   sires: string[];
   broodmareSires: string[];
   jockeys: string[];
+  /**
+   * 内・外・外→内・内→外のときだけ filters とキャッシュキーに入れる。
+   * なしと不明は null。問い合わせもキーも、絞らない今までと同じ。
+   */
+  sideFilter?: CourseSide | null;
 }
 
 const REQUIRED_FIELDS = [
@@ -61,6 +67,7 @@ const REQUIRED_FIELDS = [
 
 export function buildStatTasks(course: CourseContext, catalog: ToolCatalog): StatTask[] {
   assertFields(catalog, "get_stats", REQUIRED_FIELDS);
+  if (course.sideFilter) assertFields(catalog, "get_stats", ["course_side"]);
   if (!["芝", "ダート", "障害"].includes(course.surface)) {
     throw new JobError(`馬場種類「${course.surface}」は 芝・ダート・障害 のどれでもありません`, false);
   }
@@ -149,12 +156,15 @@ export function yearFrom(raceYear: number, periodYears: number): number {
 }
 
 function courseFilters(course: CourseContext): Record<string, unknown> {
-  return {
-    race_track: course.venue,
-    surface: course.surface,
-    distance: course.distance,
-    race_year: { gte: course.yearFrom },
-  };
+  return withCourseSideFilter(
+    {
+      race_track: course.venue,
+      surface: course.surface,
+      distance: course.distance,
+      race_year: { gte: course.yearFrom },
+    },
+    course.sideFilter,
+  );
 }
 
 function task(
@@ -176,7 +186,7 @@ function task(
     String(course.yearFrom),
     String(minStarts),
     nameKey,
-  ].join(":");
+  ].join(":") + courseSideKeySuffix(course.sideFilter);
   return { id, cacheKey, kind, label, args, status: "pending" };
 }
 

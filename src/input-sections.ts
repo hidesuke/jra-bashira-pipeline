@@ -1,3 +1,4 @@
+import { isCourseSideScopeLine } from "./course-side";
 import type { PredictInputRecord, StoredRelatedCourses } from "./predict-input";
 import {
   COURSE_RECORD_UNRESOLVED,
@@ -317,12 +318,20 @@ function parseRunnerAt(lines: string[], start: number): ParsedSection<undefined>
     return { text: `${RUNNER_STATS_HEADING}\n${second}`, horses: 0, extra: undefined };
   }
   if (!/^条件: \S+ (芝|ダート|障害) \d+m$/.test(second)) return { reason: SHAPE_RUNNER };
-  const period = lines[start + 2];
+  const kept = [lines[start]!, second];
+  let index = start + 2;
+  const side = lines[index];
+  if (side != null && isCourseSideScopeLine(side)) {
+    if (forbidden(side)) return { reason: SHAPE_RUNNER };
+    kept.push(side);
+    index += 1;
+  }
+  const period = lines[index];
   if (period == null || !/^期間: \d{4}-\d{2}-\d{2}〜\d{4}-\d{2}-\d{2}（レース日の前日までの過去\d+年）$/.test(period)) {
     return { reason: SHAPE_RUNNER };
   }
-  const kept = [lines[start]!, second, period];
-  let index = start + 3;
+  kept.push(period);
+  index += 1;
   const through = lines[index];
   if (through != null && /^確定済みデータは \d{4}-\d{2}-\d{2} まで。$/.test(through)) {
     kept.push(through);

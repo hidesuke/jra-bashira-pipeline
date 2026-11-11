@@ -30,6 +30,7 @@ import { interpretOdds } from "../src/odds";
 import { parseRaceRequest } from "../src/race-ref";
 import { rowsToObjects } from "../src/rows";
 import { assertToolArgs, catalogFromTools, selectColumns } from "../src/schema";
+import { courseSideKeySuffix, resolveCourseSide } from "../src/course-side";
 import { CORNER_RANGES, buildStatTasks, yearFrom } from "../src/stats";
 import { JobError } from "../src/types";
 import { bashiraTools } from "./fixture";
@@ -157,8 +158,41 @@ describe("stats tasks", () => {
     });
     expect(tasks.find((task) => task.kind === "broodmare_sire")?.args).toMatchObject({ min_starts: 50 });
     expect(tasks.every((task) => task.cacheKey.startsWith("stats:v2:"))).toBe(true);
+    expect(tasks.every((task) => !task.cacheKey.includes(":side:"))).toBe(true);
+    expect(JSON.stringify(tasks)).not.toContain("course_side");
     expect(JSON.stringify(tasks)).not.toContain("win_odds_rank");
     expect(tasks.map((task) => task.id)).toContain("corner:11plus");
+  });
+
+  it("puts a filtering course_side in the query and the cache key, and leaves なし unchanged", () => {
+    const base = {
+      venue: "京都",
+      surface: "芝",
+      distance: 1600,
+      yearFrom: 2022,
+      minStarts: 30,
+      broodmareMinStarts: 50,
+      sires: ["父一"],
+      broodmareSires: ["母父一"],
+      jockeys: ["騎手A"],
+    };
+    const plain = buildStatTasks(base, catalog);
+    const none = buildStatTasks({ ...base, sideFilter: resolveCourseSide({ raw: "なし", raceField: true, statsField: true, racesField: true }).statsFilter }, catalog);
+    const outer = buildStatTasks({ ...base, sideFilter: "外" }, catalog);
+    const inner = buildStatTasks({ ...base, sideFilter: "内" }, catalog);
+    const bend = buildStatTasks({ ...base, sideFilter: "外→内" }, catalog);
+    expect(none.map((task) => task.cacheKey)).toEqual(plain.map((task) => task.cacheKey));
+    expect(JSON.stringify(none)).not.toContain("course_side");
+    expect(outer.every((task) => (task.args.filters as { course_side?: string }).course_side === "外")).toBe(true);
+    expect(outer.every((task) => task.cacheKey.endsWith(courseSideKeySuffix("外")))).toBe(true);
+    expect(inner[0]?.cacheKey).not.toBe(outer[0]?.cacheKey);
+    expect((bend[0]?.args.filters as { course_side?: string }).course_side).toBe("外→内");
+    expect(bend[0]?.cacheKey).toContain(encodeURIComponent("外→内"));
+    expect(bend[0]?.cacheKey).not.toBe(outer[0]?.cacheKey);
+    const partial = resolveCourseSide({ raw: "外", raceField: true, statsField: false, racesField: true });
+    expect(partial.side).toBe("外");
+    expect(partial.statsFilter).toBeNull();
+    expect(partial.racesFilter).toBeNull();
   });
 
   it("stops when the live schema lacks a field", () => {
@@ -536,6 +570,7 @@ describe("dify v1 inputs", () => {
       surface: "{{surface}}",
       distance: "{{distance}}",
       course_summary: "{{course_summary}}",
+      course_side: "{{course_side}}",
     });
     expect(COURSE_USER_DIFY_TOKENS).toEqual({
       venue: "{{#1788717846587.course#}}",
@@ -604,6 +639,26 @@ describe("dify v1 inputs", () => {
       course_summary: "要約本文",
     });
     expect(summary).toBe("京都\n要約本文");
+    const lead = "内外回り: 外\n回り: 外（この回りだけを集計。母数が少なくても内と外は混ぜない）";
+    const prepended = fillCourseUser("{{venue}}\n{{course_summary}}", {
+      venue: "京都",
+      surface: "芝",
+      distance: "1600",
+      course_summary: "要約本文",
+      course_side: "外",
+      courseSideLead: lead,
+    });
+    expect(prepended.startsWith(`${lead}\n\n京都\n要約本文`)).toBe(true);
+    const placed = fillCourseUser("{{venue}}\n内外回り: {{course_side}}\n{{course_summary}}", {
+      venue: "京都",
+      surface: "芝",
+      distance: "1600",
+      course_summary: "要約本文",
+      course_side: "外",
+      courseSideLead: lead,
+    });
+    expect(placed).toBe("京都\n内外回り: 外\n要約本文");
+    expect(placed.startsWith("内外回り:")).toBe(false);
   });
 
   it("rejects a leftover {{# or {{name}} placeholder", () => {

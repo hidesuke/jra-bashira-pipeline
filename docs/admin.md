@@ -28,7 +28,7 @@ curl -sS "https://<worker>/admin/jobs?race_key=20261107-03-11" \
   -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET"
 ```
 
-`race_key` が無いときは 400、ジョブが無いときは 404 です。応答には `race_key`、`run_id`、`phase`、`error`、`retry`、`attempt`、`max_attempts`、`last_error`、`requested_by`、`notion_page_id`、`course_variant`、`gemini`、`odds` と、コースデータ要約の欄が入ります。`phase` が `error` のとき `error` に理由が入ります。refresh の失敗もここに出ます。再試行を待っているときは `phase` はその段階のままで、`retry` が `retrying attempt 2/3` のようになります。`attempt` と `max_attempts` はその数字、`last_error` は直前の失敗理由です。再試行中でなければこの 4 つは null です。`error` は最終失敗まで null です。`course_variant` は常に null です。理由は [course-odds.md](course-odds.md) です。プロンプト本文、コース分析の本文、予想本文、検索の引用は返しません。
+`race_key` が無いときは 400、ジョブが無いときは 404 です。応答には `race_key`、`run_id`、`phase`、`error`、`retry`、`attempt`、`max_attempts`、`last_error`、`requested_by`、`notion_page_id`、`course_variant`、`gemini`、`odds` と、コースデータ要約の欄が入ります。`phase` が `error` のとき `error` に理由が入ります。refresh の失敗もここに出ます。再試行を待っているときは `phase` はその段階のままで、`retry` が `retrying attempt 2/3` のようになります。`attempt` と `max_attempts` はその数字、`last_error` は直前の失敗理由です。再試行中でなければこの 4 つは null です。`error` は最終失敗まで null です。`course_variant` は常に null です。回りは `get_races` の `course_side` をレース情報と集計に使い、Notion のフッターはこのフィールドのままにします。理由は [course-odds.md](course-odds.md) です。プロンプト本文、コース分析の本文、予想本文、検索の引用は返しません。
 
 コースデータ要約は、予想の前に計算したものです。プロンプトの本文は返しません。
 
@@ -64,7 +64,7 @@ curl -sS "https://<worker>/admin/jobs?race_key=20261107-03-11" \
 
 `ticket_count_corrections` は、買い目の点数を差し替えた記録です。差し替えが無いときは空配列です。1 件は `tickets`（券種）、`declared`（見出しの点数）、`counted`（列から数えた点数）です。見方は [pipeline.md](pipeline.md) です。
 
-`race_input_gaps` は、レース予想の入力で空欄にした項目です。予想の前は null です。予想まで進むと配列になり、内外回りと仮柵は項目が無いので毎回入ります。ほかに空欄が無ければこの 2 件だけです。見方は [prompts.md](prompts.md) です。
+`race_input_gaps` は、レース予想の入力で空欄にした項目です。予想の前は null です。予想まで進むと配列になります。仮柵は項目が無いので毎回入ります。内外回りは、`course_side` がスキーマに無い、値が空、値が読めない、`get_stats` で絞れない、ときだけ入ります。値があるときは入りません。見方は [prompts.md](prompts.md) です。
 
 ## 予想に渡した入力
 

@@ -1,13 +1,30 @@
+import {
+  EMPTY_COURSE_SIDE,
+  MISSING_COURSE_SIDE,
+  UNREADABLE_COURSE_SIDE,
+  unresolvedCourseSide,
+  type CourseSideState,
+} from "./course-side";
 import { numberField, stringField } from "./rows";
 
 /** 出走取消・発走除外・競走除外。pipeline の出馬表と同じ区分。 */
 const SCRATCHED = new Set(["出走取消", "発走除外", "競走除外"]);
 
-export const MISSING_INNER_OUTER = "内外回り（BASHIRA に項目が無い）";
+/** tools/list に course_side が無いとき。以前の空欄と同じ文言。 */
+export const MISSING_INNER_OUTER = MISSING_COURSE_SIDE;
 export const MISSING_TEMPORARY_RAIL = "仮柵（BASHIRA に項目が無い）";
 
-const RACE_FACTS_NOTE =
+const NOTE_ABSENT =
   "注: 内外回りと仮柵は BASHIRA に項目が無い。コースは rail_type（A〜D。Aは本柵、B〜Dは移動柵）だけを書き、内・外には読み替えない。";
+
+const NOTE_KNOWN =
+  "注: 内外回りは BASHIRA の course_side。値は 内、外、外→内、内→外、なし。外→内と内→外は途中で回りが変わる。なしは印が無い。仮柵は項目が無い。コースの A〜D は rail_type（Aは本柵、B〜Dは移動柵）で、内・外には読み替えない。";
+
+const NOTE_EMPTY =
+  "注: 内外回りの値は無い。仮柵は項目が無い。コースの A〜D は rail_type（Aは本柵、B〜Dは移動柵）で、内・外には読み替えない。";
+
+const NOTE_UNREADABLE =
+  "注: 内外回りの値が読めないため空欄にした。仮柵は項目が無い。コースの A〜D は rail_type（Aは本柵、B〜Dは移動柵）で、内・外には読み替えない。";
 
 export interface RaceFacts {
   text: string;
@@ -22,9 +39,14 @@ export interface RaceFacts {
 export function buildRaceFacts(input: {
   raceRow: Record<string, unknown> | null;
   entries: Record<string, unknown>[];
+  /** 省略時は、course_side が無いときの空欄。 */
+  courseSide?: CourseSideState;
 }): RaceFacts {
   const row = input.raceRow;
-  const gaps: string[] = [MISSING_INNER_OUTER, MISSING_TEMPORARY_RAIL];
+  const courseSide = input.courseSide ?? unresolvedCourseSide();
+  const gaps: string[] = [];
+  if (courseSide.gap) gaps.push(courseSide.gap);
+  gaps.push(MISSING_TEMPORARY_RAIL);
   const name = row ? stringField(row, "race_name_main") : null;
   const grade = row ? stringField(row, "grade") : null;
   const klass = row ? stringField(row, "race_condition") : null;
@@ -48,11 +70,11 @@ export function buildRaceFacts(input: {
     `競走種別: ${kind ?? ""}`,
     `頭数: ${heads}`,
     `コース: ${rail ? `${rail}コース` : ""}`,
-    "内外回り: ",
+    `内外回り: ${courseSide.side ?? ""}`,
     "仮柵: ",
     `斤量種別: ${weightType ?? ""}`,
     `発走時刻: ${post ?? ""}`,
-    RACE_FACTS_NOTE,
+    factsNote(courseSide),
   ];
   return { text: lines.join("\n"), gaps };
 }
@@ -67,6 +89,13 @@ export function formatPostTime(value: string | null): string | null {
   const second = match[3];
   if (!second || second === "00") return `${hour}:${minute}`;
   return `${hour}:${minute}:${second}`;
+}
+
+function factsNote(state: CourseSideState): string {
+  if (state.side) return NOTE_KNOWN;
+  if (state.gap === EMPTY_COURSE_SIDE) return NOTE_EMPTY;
+  if (state.gap === UNREADABLE_COURSE_SIDE) return NOTE_UNREADABLE;
+  return NOTE_ABSENT;
 }
 
 function headCount(row: Record<string, unknown> | null, entries: Record<string, unknown>[], gaps: string[]): string {
