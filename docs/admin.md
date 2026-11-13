@@ -4,7 +4,7 @@
 
 ## 開催日の一括投入
 
-`POST /admin/batch` は、指定した開催日のレースを cron と同じ手順で積みます。
+`POST /admin/batch` は、指定した開催日のレースを積みます。定時実行は停止しています。定期予想は Dify 版（`hidesuke/jra-dify-pipeline`）です。手動は `POST /run` とこの `POST /admin/batch`（`dry_run` を含む）です。積み方は、残している `scheduled` ハンドラと同じです。
 
 ```bash
 curl -sS -X POST "https://<worker>/admin/batch" \
@@ -16,7 +16,7 @@ curl -sS -X POST "https://<worker>/admin/batch" \
 
 `date` は `YYYY-MM-DD` で必須です。ハイフンの無い `YYYYMMDD` は 400 です。`dry_run` が `true` のときは列挙し、既存のジョブを読んで飛ばすかを決めます。Queue にもロックにも KV の要約にも書きません。省略か `false` のときは積みます。中止（`canceled`）、重複、処理中、完了済みは `skipped` です。失敗済みはもう一度積みます。`race_status` が無い行や、レースを解釈できない行は `failed` です。
 
-列挙できたときの応答は 200 です。件数は `enqueued`、`would_enqueue`、`skipped`、`failed` です。ほかに `date`、`source`（この入口は `admin`。cron は `cron`）、`dry_run`、`scheduled_time`（この入口は null。cron は発火時刻）、`listed_by`（`offset` で取り切れたとき、または 1 回で取り切れたときは `day`。スキーマに `offset` が無く開催場に分けたときは `venue`）、`limit_sent`（列挙に使った `get_races` の件数）、`limit_maximum`（成功のときは null）、`error`（成功のときは null）、`races` が入ります。`races` の 1 件は `race_key`、`race_id`、`venue`、`race_number`、`action`、`reason`、`run_id` です。`action` は `enqueued`、`would_enqueue`、`skipped`、`failed` です。飛ばす理由も失敗理由も無いときは `reason` は null です。積んだときだけ `run_id` が入ります。`dry_run` でないときだけ、同じ内容を KV `batch:v1:{date}` に 1 件書き、14 日で消します。書き込みに失敗しても応答は返し、ログ `batch_summary_failed` に理由を残します。プロンプト本文は入れません。
+列挙できたときの応答は 200 です。件数は `enqueued`、`would_enqueue`、`skipped`、`failed` です。ほかに `date`、`source`（この入口は `admin`。`scheduled` が呼ばれたときは `cron`）、`dry_run`、`scheduled_time`（この入口は null。`scheduled` が呼ばれたときは発火時刻。定時では呼ばれない）、`listed_by`（`offset` で取り切れたとき、または 1 回で取り切れたときは `day`。スキーマに `offset` が無く開催場に分けたときは `venue`）、`limit_sent`（列挙に使った `get_races` の件数）、`limit_maximum`（成功のときは null）、`error`（成功のときは null）、`races` が入ります。`races` の 1 件は `race_key`、`race_id`、`venue`、`race_number`、`action`、`reason`、`run_id` です。`action` は `enqueued`、`would_enqueue`、`skipped`、`failed` です。飛ばす理由も失敗理由も無いときは `reason` は null です。積んだときだけ `run_id` が入ります。`dry_run` でないときだけ、同じ内容を KV `batch:v1:{date}` に 1 件書き、14 日で消します。書き込みに失敗しても応答は返し、ログ `batch_summary_failed` に理由を残します。プロンプト本文は入れません。
 
 0 件の日は 200 で件数 0 です。`get_races` を開催場に分けてもまだ打ち切れているとき、または `offset` の上限を超えるときは 400 で、その日は積みません。`limit` が BASHIRA の上限を超えたときも 400 で、本文は上の要約です。`limit_sent` と `limit_maximum` と `error` が入り、レースは積みません。このときだけ `dry_run` でも KV に要約を残し、通知 URL があれば `batch_failed` を送ります。件数の変え方は [README](../README.md) の「開催日の get_races 件数」、進め方は [pipeline.md](pipeline.md) です。
 

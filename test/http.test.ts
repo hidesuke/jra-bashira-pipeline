@@ -142,7 +142,7 @@ describe("http", () => {
     expect(APP_VERSION).toBe(pkg.version);
     expect(await health.json()).toEqual({
       ok: true,
-      mode: "next-day-batch",
+      mode: "manual",
       version: pkg.version,
       commit: null,
       version_id: null,

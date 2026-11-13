@@ -59,7 +59,7 @@ export function addCalendarDays(iso: string, days: number): string {
   return `${y}-${m}-${d}`;
 }
 
-/** `scheduledTime` の日本時間の翌日。cron が積む開催日。 */
+/** `scheduledTime` の日本時間の翌日。scheduled が積む開催日。 */
 export function nextJstDate(instant: Date): string {
   return addCalendarDays(jstCalendarDate(instant), 1);
 }

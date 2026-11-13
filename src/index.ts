@@ -118,7 +118,7 @@ export default {
     }
   },
   async scheduled(controller, env): Promise<void> {
-    // 予想は Queue が進める。ここでは翌日のレースを積むだけ。
+    // triggers.crons は空。定時では呼ばれない。呼ばれたときは翌日のレースを積むだけ。
     await handleScheduled(controller, batchDeps(env));
   },
 } satisfies ExportedHandler<Env>;
