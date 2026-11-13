@@ -2,7 +2,7 @@
 
 1 レースずつ BASHIRA から出走・成績・オッズを取り、Gemini でコース分析と一次予想を作り、既存の Notion データベース「場立ちのhidesuke JRA予想」に別ページとして書く Cloudflare Worker です。
 
-手動の `POST /run` は 1 レースだけです。金曜と土曜の 16:45（日本時間）に、cron が翌日の全レースを同じ経路で Queue に積みます。予想そのものは Queue が 3 件ずつ進めます。
+手動の `POST /run` は 1 レースだけです。金曜と土曜の 16:45（日本時間）に、cron が翌日の全レースを同じ経路で Queue に積みます。予想そのものは Queue が 1 件ずつ進めます。
 
 シークレットの値、プロンプトの本文、Access の Client Secret は、このリポジトリに置きません。
 
@@ -21,7 +21,7 @@
 処理の骨格は次のとおりです。
 
 1. Access を通した `POST /run` が、レース 1 件を Queue `jra-bashira-race` に積む。金曜・土曜の cron と `POST /admin/batch` も、同じ関数でレースごとに積む。
-2. Consumer は、1 つの配送でメッセージを 1 件進める（`max_batch_size` は 1）。別レースは同時に 3 件まで進む（`max_concurrency`）。段階は、出走と馬場の収集、馬ごとの近走、コース集計、Gemini、Notion への書き込みです。
+2. Consumer は、1 つの配送でメッセージを 1 件進める（`max_batch_size` は 1）。別レースも同時には進まない（`max_concurrency` は 1）。段階は、出走と馬場の収集、馬ごとの近走、コース集計、Gemini、Notion への書き込みです。
 3. 同じレースを再実行するときは、前の BASHIRA ページをアーカイブし、同じ書式で新しいページを作ります。
 
 段階の分割、外部呼び出しの上限、同じレースのロックは [docs/pipeline.md](docs/pipeline.md) に書いてあります。枠・4角・馬場状態のコース集計（`get_stats` のキャッシュ）は、コース分析にもレース予想にも渡しません。コース分析には、別に計算したコースデータ要約を渡します。レース予想には、父・母の父・騎手のこのコースの成績を `{{runner_stats}}` で渡します。`course_side` が `内`、`外`、`外→内`、`内→外` のときは、その回りだけを集計します。`なし` は絞りません。3歳未勝利（芝またはダート。G1、G2、G3、L とオープンは除く）では、race の system にマーカー `<!-- input:race_level -->` があるときだけ、馬柱の末尾に過去最高レースレベルを足します。値は共有マシンが `APP_KV` に書いた `c1:v1:meta` と `c1:v1:feat:{asof}` を読むだけで、この Worker は計算も書き込みもしません。マーカーが無いプロンプトには足しません。差し込み名は [docs/prompts.md](docs/prompts.md)、集計の中身は [docs/course-odds.md](docs/course-odds.md) です。
@@ -131,7 +131,7 @@ npx wrangler secret put NOTIFY_WEBHOOK_KEY
 
 | メソッド | パス | 認証 | 役割 |
 | --- | --- | --- | --- |
-| `GET` | `/health` | なし | 生存確認。`ok` と `mode`（`next-day-batch`）、`version`（いまは `0.9.2`）、`commit`、`version_id` を返す |
+| `GET` | `/health` | なし | 生存確認。`ok` と `mode`（`next-day-batch`）、`version`（いまは `0.9.3`）、`commit`、`version_id` を返す |
 | `POST` | `/run` | Access JWT | レース 1 件を積む。受理は 202、処理中は 409 |
 | `POST` | `/admin/batch` | Access JWT | 指定した開催日の全レースを積む。`dry_run: true` は一覧だけで積まない |
 | `GET` | `/oauth/start` | Access JWT | BASHIRA の認可を始める |

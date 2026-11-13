@@ -740,15 +740,23 @@ describe("concurrency", () => {
 });
 
 describe("worker schedule config", () => {
-  it("runs three at a time on Friday and Saturday 07:45 UTC", () => {
-    const text = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../wrangler.jsonc"), "utf8");
+  it("runs one race at a time on Friday and Saturday 07:45 UTC", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const text = readFileSync(join(root, "wrangler.jsonc"), "utf8");
     expect(text).toContain(`"crons": ["${NEXT_DAY_BATCH_CRON}"]`);
     expect(text).toContain('"max_batch_size": 1');
+    expect(text).toContain('"max_batch_timeout": 1');
     expect(text).toContain('"max_retries": 3');
+    expect(text).toContain('"retry_delay": 30');
     expect(text).toContain('"dead_letter_queue": "jra-bashira-race-dlq"');
-    expect(text).toContain('"max_concurrency": 3');
-    expect(QUEUE_MAX_CONCURRENCY).toBe(3);
+    expect(text).toContain('"max_concurrency": 1');
+    expect(text).not.toContain('"max_concurrency": 3');
+    expect(QUEUE_MAX_CONCURRENCY).toBe(1);
     expect(QUEUE_MAX_RETRIES).toBe(3);
+    const queue = readFileSync(join(root, "src/index.ts"), "utf8");
+    const handler = queue.slice(queue.indexOf("async queue"), queue.indexOf("async scheduled"));
+    expect(handler).toContain("for (const message of batch.messages)");
+    expect(handler).not.toContain("Promise.all");
     const previews = text.slice(text.indexOf('"previews"'));
     expect(previews).not.toContain('"crons"');
     expect(previews).not.toContain('"queues"');

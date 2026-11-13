@@ -4,7 +4,7 @@
 
 ## 段階
 
-`POST /run` はレースを 1 件だけ Queue `jra-bashira-race` に積みます。Consumer の `max_batch_size` は 1 で、1 つの配送はメッセージ 1 件です。別レースは `max_concurrency` の 3 件まで同時に進みます。ジョブの `phase` は次の順です。
+`POST /run` はレースを 1 件だけ Queue `jra-bashira-race` に積みます。Consumer の `max_batch_size` は 1 で、1 つの配送はメッセージ 1 件です。`max_concurrency` は 1 なので、別レースも同時には進みません。届いたメッセージが複数でも、Consumer は 1 件ずつ待ちます。ジョブの `phase` は次の順です。
 
 1. `collect`（メッセージ `start`）。馬場を 1 回取り、`tools/list` のあと `get_races`、出馬表の `get_entries`、単勝の `get_odds` を取る。
 2. `form`（メッセージ `form`）。走れる馬の近走を、未処理 8 頭ずつ取る。
@@ -78,7 +78,7 @@ predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回�
 | `max_batch_timeout` | 1 |
 | `max_retries` | 3（`src/types.ts` の `QUEUE_MAX_RETRIES` と同じ） |
 | `retry_delay` | 30 秒 |
-| `max_concurrency` | 3（`src/types.ts` の `QUEUE_MAX_CONCURRENCY` と同じ） |
+| `max_concurrency` | 1（`src/types.ts` の `QUEUE_MAX_CONCURRENCY` と同じ） |
 | `dead_letter_queue` | `jra-bashira-race-dlq` |
 
 待ち時間を置いているのは、同じジョブキーの KV 書き込みが 1 秒に 1 回という制限に当たらないようにするためです。ジョブの保存は、同じ配送の中では約 1.1 秒に 1 回まで間を空けます。
@@ -89,7 +89,7 @@ predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回�
 
 `phase` を `error` に書けたときだけ、任意の Webhook へ POST します。`NOTIFY_WEBHOOK_URL` が未設定なら送りません。本文は JSON で、`type` は `race_failed` です。入るのは `race_key`、`run_id`、失敗したときの `phase_at_failure`、短い `error`、`attempts`、分かれば `http_status`、`inspect_path`（`/admin/inspect?race_key=...`）、`jobs_path`（`/admin/jobs?race_key=...`）、`occurred_at_jst` です。キーは Secret `NOTIFY_WEBHOOK_KEY` です。ヘッダー名は平文の `NOTIFY_WEBHOOK_KEY_HEADER` で、未設定なら `Authorization: Bearer <key>` です。`Authorization` という名前は大文字小文字を問いません。別の名前ならキーをそのままそのヘッダーに入れます。`Content-Type` と `Content-Length` は使いません。URL とキーはログに出しません。失敗したときは HTTP ステータスだけをログし、約 10 秒で打ち切ります。この POST は同じ配送の外部予算に 1 件数えます。ソフト上限の 45 を使い切ったあとでも、プラットフォーム上限の 50 未満なら 1 件だけ送ります。通知の失敗でジョブを `error` 以外にしたり、Queue の再試行を足したりはしません。置き方は [operations.md](operations.md) です。
 
-複数レースを一度に積む入口は、金曜・土曜の cron と `POST /admin/batch` です。どちらもレースごとに `start` を 1 件ずつ積み、`POST /run` と同じ関数を使います。`POST /run` 自体は 1 レースのままです。`max_batch_size` は配送の件数で、レースの束ではありません。`max_concurrency` が 3 なので、別レースのメッセージは 3 件まで同時に進みます。同じレースの次の段階は、前のメッセージが終わってから積みます。終了を 1 通にまとめる `batch_completed` は送りません。
+複数レースを一度に積む入口は、金曜・土曜の cron と `POST /admin/batch` です。どちらもレースごとに `start` を 1 件ずつ積み、`POST /run` と同じ関数を使います。`POST /run` 自体は 1 レースのままです。`max_batch_size` は配送の件数で、レースの束ではありません。`max_concurrency` は 1 なので、別レースのメッセージも 1 件ずつ進みます。同じレースの次の段階は、前のメッセージが終わってから積みます。終了を 1 通にまとめる `batch_completed` は送りません。
 
 認可の失敗（未認可、`invalid_grant`、通信失敗を含む refresh 失敗）は再試行せず、ジョブを `error` にします。理由は `GET /admin/jobs` の `error` に出ます。このときも、上の Webhook を 1 回送ります。
 
@@ -97,13 +97,13 @@ predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回�
 
 受理されると 202 で `race_key`、`run_id`、`requested_by` が返ります。同じレースが処理中なら 409 です。
 
-ロックのキーは `lock:v1:{raceKey}` で、寿命は 4 時間（`LOCK_TTL_SECONDS`）です。3 並列で 36 レースを進めると、次のメッセージを待つあいだジョブの更新が止まります。`predict` が consumer の 15 分まで伸びると、その待ちは約 3 時間になります。15 分のままだと、待ちのあいだの再投入が進行中のジョブを上書きします。
+ロックのキーは `lock:v1:{raceKey}` で、寿命は 4 時間（`LOCK_TTL_SECONDS`）です。この時間は変えていません。レースは 1 件ずつ進むので、次のメッセージを待つあいだジョブの更新は止まります。`predict` が consumer の 15 分まで伸び、36 レースが予測段で並ぶと、最後の待ちは約 9 時間になり、この 4 時間を超えます。そのあいだの再投入は、進行中のジョブを上書きできます。1 レースが数分で終わるときは、36 レースでも 4 時間に収まります。
 
 ロックキーが消えていても、ジョブが処理中で最後の更新から 4 時間以内なら、新しい実行は拒みます。`phase` が `done` か `error` のとき、`error` が入っているとき、更新が 4 時間を超えて止まっているときは拒みません。ただし期限内のロックが、そのジョブと別の `runId` を持っているときは、新しい `start` が Queue にいるので拒みます。ジョブが無く、ロックの期限だけが残っているときも拒みます。
 
 別の `runId` の `start` が配送されても、期限内のロックか処理中のジョブがあるときは collect しません。ジョブを書く直前にもう一度見ます。自分が外したのではないロックは消しません。
 
-`max_concurrency` が 3 だと、次の段階のメッセージが別の isolate で、KV のジョブより先に読まれることがあります。ジョブがまだ見えない、または段階が追いついていないときは、KV に書かず再配送します。すでに先の段階へ進んだメッセージは、その段階をやり直しません。Notion の検索は日付・競馬場・レース番号で絞ります。並走しても、別レースのページは候補になりません。同じレースの BASHIRA ページが複数なら、これまでどおり止めます。
+次の段階のメッセージが別の isolate で、KV のジョブより先に読まれることがあります。ジョブがまだ見えない、または段階が追いついていないときは、KV に書かず再配送します。すでに先の段階へ進んだメッセージは、その段階をやり直しません。Notion の検索は日付・競馬場・レース番号で絞ります。別レースのページは候補になりません。同じレースの BASHIRA ページが複数なら、これまでどおり止めます。
 
 終了時と、再試行しない失敗を保存できたときは、その実行のロックだけを消します。Queue へ積む前に失敗したときも、その実行のロックだけを消します。
 

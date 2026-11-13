@@ -10,15 +10,17 @@ export const STATS_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 export const MODEL_LIST_TTL_MS = 10 * 60 * 1000;
 /**
  * 同じレースの再投入を拒む時間。
- * 36 レースを 3 並列で進めると、次のメッセージを待つあいだジョブの更新が止まる。
- * predict が consumer 上限の 15 分まで伸びると、その待ちは約 3 時間になる。
- * 15 分のままだと、待ちのあいだの再投入が進行中のジョブを上書きする。
+ * レースは 1 件ずつ進む。次のメッセージを待つあいだ、ジョブの更新は止まる。
+ * predict が consumer 上限の 15 分まで伸び、36 レースが予測段で並ぶと、
+ * 最後の待ちは約 9 時間になり、この 4 時間を超える。
+ * そのあいだの再投入は、進行中のジョブを上書きできる。
+ * 1 レースが数分で終わるときは、36 レースでもこの時間に収まる。
  */
 export const LOCK_TTL_SECONDS = 4 * 60 * 60;
 /** wrangler.jsonc の queues.consumers.max_retries と同じ。 */
 export const QUEUE_MAX_RETRIES = 3;
 /** wrangler.jsonc の queues.consumers.max_concurrency と同じ。 */
-export const QUEUE_MAX_CONCURRENCY = 3;
+export const QUEUE_MAX_CONCURRENCY = 1;
 export const BASHIRA_MARKER = "BASHIRAで取得";
 export const DEFAULT_MODEL_NAME = "gemini-flash-latest";
 
