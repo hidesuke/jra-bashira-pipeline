@@ -3,7 +3,16 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { BashiraPort } from "../src/bashira/port";
-import { handleScheduled, runDateBatch, type BatchDeps, type BatchSummary } from "../src/batch";
+import {
+  BashiraLimitError,
+  DEFAULT_MEETING_RACE_LIMIT,
+  handleScheduled,
+  parseLimitMaximum,
+  parseMeetingRaceLimit,
+  runDateBatch,
+  type BatchDeps,
+  type BatchSummary,
+} from "../src/batch";
 import { NEXT_DAY_BATCH_CRON } from "../src/cron";
 import { handleRequest, type HttpDeps } from "../src/http";
 import { jstCalendarDate, jstWeekday, nextJstDate } from "../src/jst";
@@ -12,6 +21,29 @@ import { notionRaceFilter, pageMatchesRace } from "../src/notion";
 import { handleJobMessage, type PipelineDeps } from "../src/pipeline";
 import { QUEUE_MAX_CONCURRENCY, QUEUE_MAX_RETRIES, type JobMessage, type RaceRef } from "../src/types";
 import { bashiraTools } from "./fixture";
+import type { McpTool } from "../src/schema";
+
+const LIMIT_ERROR =
+  'validating "arguments": validating root: validating /properties/limit: maximum: 500/1 is greater than 200.000000';
+
+function toolsWithOffset(): McpTool[] {
+  return bashiraTools.map((entry) => {
+    if (entry.name !== "get_races") return entry;
+    const schema = entry.inputSchema as { properties: Record<string, unknown> };
+    return {
+      ...entry,
+      inputSchema: {
+        ...schema,
+        properties: {
+          ...schema.properties,
+          offset: { type: "integer" },
+          order_by: { type: "string" },
+          order: { type: "string" },
+        },
+      },
+    };
+  });
+}
 
 const DATE = "2026-11-09";
 
@@ -27,19 +59,25 @@ function raceRow(raceNumber: number, status = "upcoming", venue = "東京", code
   };
 }
 
-function port(rowsFor: (filters: Record<string, unknown>) => { truncated?: boolean; rows: Array<Record<string, unknown>> }): {
+function port(
+  rowsFor: (
+    filters: Record<string, unknown>,
+    args: Record<string, unknown>,
+  ) => { truncated?: boolean; rows: Array<Record<string, unknown>>; row_count?: number; data_version?: string },
+  tools: McpTool[] = bashiraTools,
+): {
   bashira: BashiraPort;
   calls: Array<Record<string, unknown>>;
 } {
   const calls: Array<Record<string, unknown>> = [];
   const bashira: BashiraPort = {
     async listTools() {
-      return { ok: true, tools: bashiraTools };
+      return { ok: true, tools };
     },
     async callTool(_name, args) {
       calls.push(args);
       const filters = (args.filters ?? {}) as Record<string, unknown>;
-      return { ok: true, data: rowsFor(filters) };
+      return { ok: true, data: rowsFor(filters, args) };
     },
     async callTools() {
       return { ok: false, code: "upstream", retryable: true, message: "no", results: [] };
@@ -150,9 +188,14 @@ describe("meeting batch", () => {
     expect(env.messages.map((message) => (message.kind === "start" ? message.race.raceNumber : 0))).toEqual([1, 12]);
     expect(env.messages.every((message) => message.kind === "start" && message.requestedBy === "cron")).toBe(true);
     expect(calls[0]).toMatchObject({
-      limit: 500,
+      limit: DEFAULT_MEETING_RACE_LIMIT,
       filters: { race_meeting_date: { gte: DATE, lte: DATE } },
     });
+    expect(calls.every((call) => Number(call.limit) <= 200)).toBe(true);
+    expect(calls.every((call) => !("offset" in call))).toBe(true);
+    expect(summary.limit_sent).toBe(200);
+    expect(summary.limit_maximum).toBeNull();
+    expect(summary.error).toBeNull();
     expect(calls).toHaveLength(1);
     const stored = JSON.parse((await env.kv.get(keys.batch(DATE))) ?? "{}") as BatchSummary;
     expect(stored.enqueued).toBe(2);
@@ -176,7 +219,7 @@ describe("meeting batch", () => {
     expect(await env.kv.get(keys.batch(DATE))).toContain('"enqueued":0');
   });
 
-  it("re-queries each venue when the day list is truncated", async () => {
+  it("re-queries each venue when the day list is truncated and offset is absent", async () => {
     const { bashira, calls } = port((filters) => {
       if (!filters.race_track) {
         return { truncated: true, rows: [raceRow(1, "upcoming", "函館", "02")] };
@@ -203,7 +246,7 @@ describe("meeting batch", () => {
     expect(env.messages.some((message) => message.kind === "start" && message.race.venue === "函館")).toBe(false);
   });
 
-  it("does not enqueue a partial card when a venue list is still truncated", async () => {
+  it("does not enqueue a partial card when a venue list is still truncated and offset is absent", async () => {
     const { bashira } = port((filters) => {
       if (!filters.race_track) return { truncated: true, rows: [raceRow(1)] };
       if (filters.race_track === "東京") return { truncated: true, rows: [raceRow(1)] };
@@ -215,6 +258,150 @@ describe("meeting batch", () => {
     ).rejects.toThrow(/offset/);
     expect(env.messages).toHaveLength(0);
     expect(await env.kv.get(keys.batch(DATE))).toBeNull();
+  });
+
+  it("pages with offset until every race on the day is listed", async () => {
+    const all = [
+      ...Array.from({ length: 12 }, (_, index) => raceRow(index + 1, "upcoming", "東京", "05")),
+      ...Array.from({ length: 12 }, (_, index) => raceRow(index + 1, "upcoming", "京都", "08")),
+      ...Array.from({ length: 12 }, (_, index) => raceRow(index + 1, "upcoming", "阪神", "09")),
+    ];
+    const pageSize = 20;
+    const { bashira, calls } = port((filters, args) => {
+      expect(filters.race_track).toBeUndefined();
+      const offset = Number(args.offset ?? 0);
+      const rows = all.slice(offset, offset + pageSize);
+      return {
+        truncated: offset + rows.length < all.length,
+        rows,
+        row_count: rows.length,
+        data_version: "v1",
+      };
+    }, toolsWithOffset());
+    const env = harness(bashira);
+    const summary = await runDateBatch(env.deps, {
+      date: DATE,
+      source: "cron",
+      dryRun: false,
+      requestedBy: "cron",
+    });
+    expect(summary.enqueued).toBe(all.length);
+    expect(summary.listed_by).toBe("day");
+    expect(summary.failed).toBe(0);
+    expect(calls.map((call) => call.limit)).toEqual([200, 200]);
+    expect(calls.every((call) => Number(call.limit) <= 200)).toBe(true);
+    expect(calls[1]?.offset).toBe(pageSize);
+    expect(calls[0]?.order_by).toBe("race_number");
+    expect(env.messages).toHaveLength(all.length);
+  });
+
+  it("restarts from the first page when data_version changes", async () => {
+    let fresh = false;
+    const { bashira } = port((_filters, args) => {
+      const offset = Number(args.offset ?? 0);
+      if (!fresh) {
+        if (offset === 0) return { truncated: true, rows: [raceRow(1)], row_count: 1, data_version: "v1" };
+        fresh = true;
+        return { truncated: true, rows: [raceRow(9)], row_count: 1, data_version: "v2" };
+      }
+      if (offset === 0) return { truncated: true, rows: [raceRow(2)], row_count: 1, data_version: "v2" };
+      return { truncated: false, rows: [raceRow(3)], row_count: 1, data_version: "v2" };
+    }, toolsWithOffset());
+    const env = harness(bashira);
+    const summary = await runDateBatch(env.deps, {
+      date: DATE,
+      source: "cron",
+      dryRun: false,
+      requestedBy: "cron",
+    });
+    expect(summary.races.map((race) => race.race_number)).toEqual([2, 3]);
+    expect(summary.enqueued).toBe(2);
+  });
+
+  it("does not enqueue a partial card when offset cannot pass its maximum", async () => {
+    const { bashira } = port((_filters, args) => {
+      const offset = Number(args.offset ?? 0);
+      if (offset === 0) return { truncated: true, rows: [raceRow(1)], row_count: 2000, data_version: "v" };
+      return { truncated: true, rows: [raceRow(2)], row_count: 1, data_version: "v" };
+    }, toolsWithOffset());
+    const env = harness(bashira);
+    await expect(
+      runDateBatch(env.deps, { date: DATE, source: "cron", dryRun: false, requestedBy: "cron" }),
+    ).rejects.toThrow(/offset 上限/);
+    expect(env.messages).toHaveLength(0);
+    expect(await env.kv.get(keys.batch(DATE))).toBeNull();
+  });
+
+  it("reads the get_races limit from KV and falls back to 200", async () => {
+    expect(parseMeetingRaceLimit(null)).toBe(200);
+    expect(parseMeetingRaceLimit("")).toBe(200);
+    expect(parseMeetingRaceLimit("nope")).toBe(200);
+    expect(parseMeetingRaceLimit("0")).toBe(200);
+    expect(parseMeetingRaceLimit("-3")).toBe(200);
+    expect(parseMeetingRaceLimit("1.5")).toBe(200);
+    expect(parseMeetingRaceLimit('"80"')).toBe(80);
+    expect(parseMeetingRaceLimit("50")).toBe(50);
+    expect(parseLimitMaximum(LIMIT_ERROR)).toEqual({ sent: 500, maximum: 200 });
+    expect(parseLimitMaximum("別の失敗")).toBeNull();
+
+    const sent: number[] = [];
+    const { bashira } = port((_filters, args) => {
+      sent.push(Number(args.limit));
+      return { truncated: false, rows: [raceRow(1)] };
+    });
+    const missing = harness(bashira);
+    await runDateBatch(missing.deps, { date: DATE, source: "admin", dryRun: true, requestedBy: "Muse" });
+    await missing.kv.put(keys.getRacesLimit, "nope");
+    await runDateBatch(missing.deps, { date: DATE, source: "admin", dryRun: true, requestedBy: "Muse" });
+    await missing.kv.put(keys.getRacesLimit, "50");
+    const summary = await runDateBatch(missing.deps, { date: DATE, source: "admin", dryRun: true, requestedBy: "Muse" });
+    expect(sent).toEqual([200, 200, 50]);
+    expect(summary.limit_sent).toBe(50);
+    expect(sent.every((limit) => limit <= 200)).toBe(true);
+  });
+
+  it("records the BASHIRA limit maximum and does not enqueue when limit is rejected", async () => {
+    const { bashira, calls } = port(() => ({ truncated: false, rows: [] }));
+    const failing: BashiraPort = {
+      listTools: () => bashira.listTools(),
+      async callTool(_name, args) {
+        calls.push(args);
+        return { ok: false, code: "upstream", retryable: true, message: LIMIT_ERROR };
+      },
+      callTools: () => bashira.callTools([]),
+    };
+    const env = harness(failing);
+    await env.kv.put(keys.getRacesLimit, "500");
+    const bodies: Array<Record<string, unknown>> = [];
+    env.deps.notify = { url: "https://notify.test/hook", key: "super-secret" };
+    env.deps.fetch = async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(null, { status: 204 });
+    };
+    await expect(
+      runDateBatch(env.deps, { date: DATE, source: "cron", dryRun: true, requestedBy: "cron" }),
+    ).rejects.toBeInstanceOf(BashiraLimitError);
+    expect(env.messages).toHaveLength(0);
+    expect(calls[0]?.limit).toBe(500);
+    const stored = JSON.parse((await env.kv.get(keys.batch(DATE))) ?? "{}") as BatchSummary;
+    expect(stored.limit_sent).toBe(500);
+    expect(stored.limit_maximum).toBe(200);
+    expect(stored.error).toContain("送った limit は 500");
+    expect(stored.error).toContain("上限は 200");
+    expect(stored.error).toContain(LIMIT_ERROR);
+    expect(stored.enqueued).toBe(0);
+    expect(stored.races).toEqual([]);
+    expect(bodies[0]).toMatchObject({
+      type: "batch_failed",
+      date: DATE,
+      source: "cron",
+      limit_sent: 500,
+      limit_maximum: 200,
+    });
+    expect(String(bodies[0]?.error)).toContain("200");
+    expect(String(bodies[0]?.error)).toContain("500");
+    expect(JSON.stringify(env.logs)).not.toContain("super-secret");
+    expect(JSON.stringify(bodies)).not.toContain("super-secret");
   });
 
   it("skips an active or done job and enqueues a failed one again", async () => {
@@ -300,6 +487,31 @@ describe("meeting batch", () => {
     expect(seen).toEqual(["2026-11-08"]);
     expect(env.logs.some((entry) => entry.event === "batch_empty")).toBe(true);
   });
+
+  it("records the limit rejection for the next JST day and still fails the cron", async () => {
+    const { bashira, calls } = port(() => ({ truncated: false, rows: [] }));
+    const failing: BashiraPort = {
+      listTools: () => bashira.listTools(),
+      async callTool(_name, args) {
+        calls.push(args);
+        return { ok: false, code: "upstream", retryable: true, message: LIMIT_ERROR };
+      },
+      callTools: () => bashira.callTools([]),
+    };
+    const env = harness(failing);
+    await env.kv.put(keys.getRacesLimit, "500");
+    await expect(
+      handleScheduled({ scheduledTime: Date.parse("2026-11-13T07:45:00Z"), cron: NEXT_DAY_BATCH_CRON }, env.deps),
+    ).rejects.toBeInstanceOf(BashiraLimitError);
+    const stored = JSON.parse((await env.kv.get(keys.batch("2026-11-14"))) ?? "{}") as BatchSummary;
+    expect(stored.date).toBe("2026-11-14");
+    expect(stored.source).toBe("cron");
+    expect(stored.limit_sent).toBe(500);
+    expect(stored.limit_maximum).toBe(200);
+    expect(stored.enqueued).toBe(0);
+    expect(env.logs.some((entry) => entry.event === "batch_limit_rejected" && entry.limit_maximum === 200)).toBe(true);
+    expect(env.messages).toHaveLength(0);
+  });
 });
 
 describe("admin batch route", () => {
@@ -370,6 +582,81 @@ describe("admin batch route", () => {
     expect(body.would_enqueue).toBe(1);
     expect(body.races[0]?.race_key).toBe("20261109-05-01");
     expect(body.races[0]?.action).toBe("would_enqueue");
+    expect(body.limit_sent).toBe(200);
+  });
+
+  it("returns the limit maximum on 400 and keeps the summary", async () => {
+    const { bashira, calls } = port(() => ({ truncated: false, rows: [] }));
+    const failing: BashiraPort = {
+      listTools: () => bashira.listTools(),
+      async callTool(_name, args) {
+        calls.push(args);
+        return { ok: false, code: "upstream", retryable: true, message: LIMIT_ERROR };
+      },
+      callTools: () => bashira.callTools([]),
+    };
+    const kv = new MemoryKv();
+    await kv.put(keys.getRacesLimit, "500");
+    const bodies: Array<Record<string, unknown>> = [];
+    const http: HttpDeps = {
+      config: {
+        babaUrl: "https://baba.test/latest",
+        geminiApiKey: "gemini-key",
+        notionToken: "notion-token",
+        notionDatabaseId: "db",
+        statsPeriodYears: 5,
+        statsMinStarts: 30,
+        broodmareMinStarts: 50,
+        courseSummaryMinCount: 30,
+        defaultModel: "gemini-flash-latest",
+        accessTeamDomain: "https://team.cloudflareaccess.com",
+        accessAud: "aud-tag",
+        accessClientIdGrok: "grok-id",
+        accessClientIdMuse: "muse-id",
+      },
+      kv,
+      bashira: failing,
+      now: () => new Date("2026-11-13T07:45:00Z"),
+      enqueue: async () => {
+        throw new Error("上限エラーでは積まない");
+      },
+      log: () => {},
+      notify: { url: "https://notify.test/hook" },
+      fetch: async (_url, init) => {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(null, { status: 204 });
+      },
+      verifyJwt: async () => ({ common_name: "ignored" }),
+      oauth: {
+        async getStatus() {
+          return { registered: true, authorized: true, needsReauth: false, expiresAt: null, lastError: null };
+        },
+        async beginAuthorization() {
+          return { url: "https://example.test" };
+        },
+        async completeAuthorization() {
+          return { ok: true };
+        },
+      },
+    };
+    const headers = new Headers({ "cf-access-jwt-assertion": "token", "cf-access-client-id": "grok-id" });
+    const response = await handleRequest(
+      new Request("https://worker.example/admin/batch", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ date: "2026-11-14", dry_run: true }),
+      }),
+      http,
+    );
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as BatchSummary;
+    expect(body.limit_sent).toBe(500);
+    expect(body.limit_maximum).toBe(200);
+    expect(body.error).toContain("上限は 200");
+    expect(body.enqueued).toBe(0);
+    const stored = JSON.parse((await kv.get(keys.batch("2026-11-14"))) ?? "{}") as BatchSummary;
+    expect(stored.limit_maximum).toBe(200);
+    expect(bodies[0]).toMatchObject({ type: "batch_failed", limit_sent: 500, limit_maximum: 200, source: "admin" });
   });
 });
 

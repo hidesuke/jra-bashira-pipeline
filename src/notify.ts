@@ -63,6 +63,37 @@ export function buildRaceFailedPayload(input: RaceFailedInput): RaceFailedPayloa
   return payload;
 }
 
+export interface BatchFailedInput {
+  date: string;
+  source: "cron" | "admin";
+  error: string;
+  limitSent: number;
+  limitMaximum: number | null;
+  occurredAt: Date;
+}
+
+export interface BatchFailedPayload {
+  type: "batch_failed";
+  date: string;
+  source: "cron" | "admin";
+  error: string;
+  limit_sent: number;
+  limit_maximum: number | null;
+  occurred_at_jst: string;
+}
+
+export function buildBatchFailedPayload(input: BatchFailedInput): BatchFailedPayload {
+  return {
+    type: "batch_failed",
+    date: input.date,
+    source: input.source,
+    error: shortError(input.error),
+    limit_sent: input.limitSent,
+    limit_maximum: input.limitMaximum,
+    occurred_at_jst: formatJstNow(input.occurredAt),
+  };
+}
+
 /** キーが無ければ認証ヘッダーは付けない。content-type は常に JSON。 */
 export function webhookHeaders(config: NotifyConfig): Headers {
   const headers = new Headers();
@@ -129,6 +160,55 @@ export async function notifyRaceFailed(
       await response.body?.cancel();
     } catch {
       // 本文は読まない。失敗しても通知結果はステータスだけで足りる。
+    }
+    options.log?.(response.ok ? "notify_sent" : "notify_failed", {
+      type: payload.type,
+      status: response.status,
+    });
+  } catch {
+    options.log?.("notify_failed", { type: payloadType, status: null });
+  }
+}
+
+/**
+ * 開催日バッチが get_races の limit 上限で失敗した通知。
+ * URL が無ければ何もしない。失敗しても投げない。URL とキーはログに出さない。
+ */
+export async function notifyBatchFailed(
+  config: NotifyConfig | undefined,
+  input: BatchFailedInput,
+  options: {
+    budget: ExternalBudget;
+    fetch?: typeof fetch;
+    log?: (event: string, fields?: Record<string, unknown>) => void;
+  },
+): Promise<void> {
+  const url = config?.url?.trim() ?? "";
+  if (!url) return;
+  const fetcher = options.fetch ?? fetch;
+  let payloadType = "batch_failed";
+  try {
+    const payload = buildBatchFailedPayload(input);
+    payloadType = payload.type;
+    const response = await budgetedNotifyFetch(
+      options.budget,
+      url,
+      {
+        method: "POST",
+        headers: webhookHeaders(config ?? {}),
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(NOTIFY_TIMEOUT_MS),
+      },
+      fetcher,
+    );
+    if (!response) {
+      options.log?.("notify_failed", { type: payload.type, status: null });
+      return;
+    }
+    try {
+      await response.body?.cancel();
+    } catch {
+      // 本文は読まない。
     }
     options.log?.(response.ok ? "notify_sent" : "notify_failed", {
       type: payload.type,

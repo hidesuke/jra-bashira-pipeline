@@ -293,11 +293,12 @@ describe("past runs table", () => {
   it("plans one get_entries until the row budget, then another, and chunks pace ids by 100", () => {
     const light = Array.from({ length: 10 }, (_, index) => horseOf(index, 10));
     expect(planCareerBatches(light)).toHaveLength(1);
-    const heavy = [horseOf(1, 200), horseOf(2, 200), horseOf(3, 200)];
+    const heavy = [horseOf(1, 70), horseOf(2, 70), horseOf(3, 70)];
     const batches = planCareerBatches(heavy);
     expect(batches.map((batch) => batch.map((item) => item.horseNumber))).toEqual([[1, 2], [3]]);
     const names = Array.from({ length: 101 }, (_, index) => horseOf(index + 1, 0));
-    expect(planCareerBatches(names).map((batch) => batch.length)).toEqual([100, 1]);
+    expect(planCareerBatches(names).map((batch) => batch.length)).toEqual([50, 50, 1]);
+    expect(Number(careerQuery(race, [horse], ["horse_name"]).limit)).toBeLessThanOrEqual(200);
     expect(careerQuery(race, [horse], ["horse_name"]).filters).toMatchObject({ horse_name: "ア" });
     expect(careerQuery(race, [horse, horseOf(2, 1)], ["horse_name"]).filters).toMatchObject({ horse_name: ["ア", "馬2"] });
     const queries = planPaceQueries(Array.from({ length: 101 }, (_, index) => `id-${index}`));
@@ -331,7 +332,7 @@ describe("past runs table", () => {
         return { ok: true, results: [] };
       },
     };
-    const horses = [horse, horseOf(2, 200)];
+    const horses = [horse, horseOf(2, 20)];
     const loaded = await loadPastPerformance({
       bashira,
       catalog: catalogFromTools(bashiraTools),

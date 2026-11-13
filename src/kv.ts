@@ -9,6 +9,8 @@ export const keys = {
   models: "config:models",
   modelsPrevious: "config:models:previous",
   modelsHistory: "config:models:history",
+  /** 開催日の get_races に渡す limit。正の整数の JSON。無い・不正ならコードの既定。 */
+  getRacesLimit: "config:get-races-limit",
   geminiModels: "cache:v2:gemini-models",
   prompt: (stage: "course" | "race") => `prompt:v2:${stage}`,
   /**

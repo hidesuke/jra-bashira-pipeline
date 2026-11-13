@@ -131,7 +131,7 @@ npx wrangler secret put NOTIFY_WEBHOOK_KEY
 
 | メソッド | パス | 認証 | 役割 |
 | --- | --- | --- | --- |
-| `GET` | `/health` | なし | 生存確認。`ok` と `mode`（`next-day-batch`）、`version`（いまは `0.9.0`）、`commit`、`version_id` を返す |
+| `GET` | `/health` | なし | 生存確認。`ok` と `mode`（`next-day-batch`）、`version`（いまは `0.9.2`）、`commit`、`version_id` を返す |
 | `POST` | `/run` | Access JWT | レース 1 件を積む。受理は 202、処理中は 409 |
 | `POST` | `/admin/batch` | Access JWT | 指定した開催日の全レースを積む。`dry_run: true` は一覧だけで積まない |
 | `GET` | `/oauth/start` | Access JWT | BASHIRA の認可を始める |
@@ -145,6 +145,49 @@ npx wrangler secret put NOTIFY_WEBHOOK_KEY
 | `POST` | `/admin/models/restore` | Access JWT | 直前のモデル設定に戻す |
 
 `POST /run` のリクエストは [docs/run.md](docs/run.md)、管理用 API は [docs/admin.md](docs/admin.md)、Access の検証は [docs/access.md](docs/access.md) です。
+
+## 開催日の get_races 件数
+
+金曜・土曜の cron と `POST /admin/batch` は、翌日（または指定日）のレースを BASHIRA の `get_races` で列挙します。1 回に取る件数 `limit` はコードに固定せず、既存の KV バインディング `APP_KV` から読みます。
+
+| 項目 | 値 |
+| --- | --- |
+| キー | `config:get-races-limit` |
+| 値 | 正の整数の JSON。例は `200`（引用符の無い数字）。`"200"` のように数字だけの JSON 文字列も読む |
+| 既定 | キーが無い、空、または正の整数でないときは `200` |
+
+`200` は、確認した BASHIRA `get_races` の `limit` の上限です。上限を超える値を入れると、その呼び出しは引数チェックで失敗します。失敗したときはレースを 1 件も積まず、KV `batch:v1:{開催日}` と通知（`NOTIFY_WEBHOOK_URL` があるとき。`type` は `batch_failed`）に、送った `limit_sent` と BASHIRA の `limit_maximum` を別々に残します。`dry_run` でも、この失敗のときだけ要約を残します。通知 URL が無いときは通知しません。
+
+件数を変えるときは、デプロイせずに本番の KV へ書きます。値や名前空間の id は秘密ではないですが、コマンドにトークンは渡しません。
+
+```bash
+npx wrangler kv key put --remote --binding APP_KV "config:get-races-limit" "200"
+npx wrangler kv key get --remote --binding APP_KV "config:get-races-limit"
+```
+
+`key get` の結果が `200` なら、その値が入っています。キーが無いときはコマンドが失敗し、Worker は既定の 200 を使います。
+
+反映の確認は、積む前に `dry_run` です。応答の `limit_sent` が、いま有効な件数です。Access の Client ID と Client Secret は環境の変数を使い、このリポジトリには書きません。
+
+```bash
+curl -sS -X POST "https://<worker>/admin/batch" \
+  -H "CF-Access-Client-Id: $GROK_ACCESS_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET" \
+  -H "content-type: application/json" \
+  -d '{"date":"2026-11-14","dry_run":true}'
+```
+
+`limit_sent` が意図した件数で、`enqueued` が 0、`would_enqueue` が開催数なら、同じ日付で `dry_run` を外して積み直します。
+
+```bash
+curl -sS -X POST "https://<worker>/admin/batch" \
+  -H "CF-Access-Client-Id: $GROK_ACCESS_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: $GROK_ACCESS_CLIENT_SECRET" \
+  -H "content-type: application/json" \
+  -d '{"date":"2026-11-14"}'
+```
+
+上限エラーのときは HTTP 400 で、本文に `error`、`limit_sent`、`limit_maximum` が入ります。`limit_maximum` 以下の値を KV に書いてから、上の `dry_run` と本実行をもう一度します。1 日分は `limit` が 200 以下でも、`offset` で続きを取るので全件列挙します。進め方は [docs/pipeline.md](docs/pipeline.md) と [docs/admin.md](docs/admin.md) です。
 
 ## ドキュメント
 

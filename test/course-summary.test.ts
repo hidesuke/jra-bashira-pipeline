@@ -103,6 +103,7 @@ describe("course summary queries", () => {
       "bracket",
       "going",
     ]);
+    expect(COURSE_RACE_COUNT_LIMIT).toBeLessThanOrEqual(200);
     expect(plan.races).toMatchObject({
       limit: COURSE_RACE_COUNT_LIMIT,
       filters: { race_status: "finished", distance: 1800 },
@@ -306,6 +307,57 @@ describe("collectCourseSummary", () => {
     expect(record.status).toBe("ok");
     expect(record.text).toContain("京都 ダート 1800m");
     expect(record.raceCount).toBe(435);
+  });
+
+  it("pages get_races when the race count is truncated and stays within limit 200", async () => {
+    const raceCalls: Array<Record<string, unknown>> = [];
+    const paged = catalogFromTools(
+      bashiraTools.map((entry) => {
+        if (entry.name !== "get_races") return entry;
+        const schema = entry.inputSchema as { properties: Record<string, unknown> };
+        return {
+          ...entry,
+          inputSchema: {
+            ...schema,
+            properties: { ...schema.properties, offset: { type: "integer" } },
+          },
+        };
+      }),
+    );
+    const bashira: BashiraPort = {
+      async listTools() {
+        return { ok: true, tools: [] };
+      },
+      async callTool(_name, args) {
+        raceCalls.push(args);
+        const offset = Number(args.offset ?? 0);
+        const page = (count: number, truncated: boolean) => ({
+          ...(finishedRaces(count, truncated) as Record<string, unknown>),
+          data_version: "v1",
+        });
+        if (offset === 0) return { ok: true, data: page(200, true) };
+        return { ok: true, data: page(35, false) };
+      },
+      async callTools(batch) {
+        return { ok: true, results: batch.map((call) => payloadFor(call.args)) };
+      },
+    };
+    const record = await collectCourseSummary({
+      bashira,
+      catalog: paged,
+      venue: "京都",
+      surface: "ダート",
+      distance: 1800,
+      raceDate: "2026-11-08",
+      periodYears: 5,
+      minCount: 30,
+    });
+    expect(raceCalls.map((call) => call.limit)).toEqual([200, 200]);
+    expect(raceCalls.every((call) => Number(call.limit) <= 200)).toBe(true);
+    expect(raceCalls[1]?.offset).toBe(200);
+    expect(record.raceCount).toBe(235);
+    expect(record.raceCountTruncated).toBe(false);
+    expect(record.text).toContain("レース数: 235");
   });
 
   it("stops the summary when get_stats fails and does not ask for races", async () => {

@@ -15,7 +15,8 @@ import {
   restoreModelUpdate,
   saveModelState,
 } from "./models";
-import { runDateBatch } from "./batch";
+import { BashiraLimitError, runDateBatch } from "./batch";
+import type { NotifyConfig } from "./notify";
 import type { BashiraPort } from "./bashira/port";
 import { enqueueRace } from "./enqueue";
 import type { AppConfig } from "./pipeline";
@@ -55,6 +56,8 @@ export interface HttpDeps {
   /** 開催日バッチが BASHIRA を呼ぶ。無いルートでは使わない。 */
   bashira?: BashiraPort;
   log?(event: string, fields?: Record<string, unknown>): void;
+  /** 開催日バッチが limit 上限で失敗したときの通知。URL が無ければ送らない。 */
+  notify?: NotifyConfig;
   /** Workers の version metadata。tag が空のときは buildCommit を見る。 */
   version?: { id: string; tag: string; timestamp: string } | null;
   /** scripts/write-build-info.mjs が WORKERS_CI_COMMIT_SHA から埋め込んだ SHA。 */
@@ -161,22 +164,29 @@ async function postBatch(request: Request, caller: Caller, deps: HttpDeps): Prom
   if (record.dry_run != null && typeof record.dry_run !== "boolean") {
     throw new JobError("dry_run は true または false です", false);
   }
-  const summary = await runDateBatch(
-    {
-      kv: deps.kv,
-      bashira: deps.bashira,
-      enqueue: deps.enqueue,
-      now: deps.now,
-      log: deps.log,
-    },
-    {
-      date: record.date,
-      source: "admin",
-      dryRun: record.dry_run === true,
-      requestedBy: caller.name,
-    },
-  );
-  return json(summary);
+  try {
+    const summary = await runDateBatch(
+      {
+        kv: deps.kv,
+        bashira: deps.bashira,
+        enqueue: deps.enqueue,
+        now: deps.now,
+        log: deps.log,
+        notify: deps.notify,
+        fetch: deps.fetch,
+      },
+      {
+        date: record.date,
+        source: "admin",
+        dryRun: record.dry_run === true,
+        requestedBy: caller.name,
+      },
+    );
+    return json(summary);
+  } catch (err) {
+    if (err instanceof BashiraLimitError && err.summary) return json(err.summary, 400);
+    throw err;
+  }
 }
 
 async function getModels(deps: HttpDeps, _caller: Caller): Promise<Response> {

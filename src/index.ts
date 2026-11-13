@@ -53,6 +53,7 @@ function httpDeps(env: Env): HttpDeps {
       }),
     oauth: stub,
     bashira: stub,
+    notify: notifyConfigFromEnv(env),
     log: (event, fields) => {
       console.log(JSON.stringify({ event, ...fields }));
     },
@@ -67,6 +68,7 @@ function batchDeps(env: Env): BatchDeps {
       await env.RACE_QUEUE.send(message);
     },
     now: () => new Date(),
+    notify: notifyConfigFromEnv(env),
     log: (event, fields) => {
       console.log(JSON.stringify({ event, ...fields }));
     },

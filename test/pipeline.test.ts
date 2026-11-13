@@ -6,6 +6,7 @@ import type { JobState } from "../src/job";
 import { keys, MemoryKv } from "../src/kv";
 import { loadLlmTrace } from "../src/llm-trace";
 import { loadPredictInput } from "../src/predict-input";
+import { ENTRIES_ROW_LIMIT } from "../src/past-runs";
 import { handleJobMessage, NOTION_CONTINUATION_LIMIT, type PipelineDeps } from "../src/pipeline";
 import { RACE_LEVEL_HEADING, RACE_LEVEL_MARKER } from "../src/race-level";
 import { QUEUE_MAX_RETRIES, type JobMessage, type RaceRef } from "../src/types";
@@ -154,7 +155,7 @@ function harness(options?: {
           };
         }
         if (typeof horseName === "string" && horseName) {
-          if (args.limit === 500) {
+          if (args.limit === ENTRIES_ROW_LIMIT) {
             return { ok: true, data: { truncated: false, rows: sampleCareerRows(horseName) } };
           }
           return {
@@ -808,7 +809,8 @@ describe("pipeline", () => {
     const job = JSON.parse((await env.kv.get(keys.job(race.raceKey))) ?? "{}") as JobState;
     expect(job.prediction?.courseText).toBe("コースは先行が残る");
     expect(job.raceInputGaps).toEqual(["内外回り（値が無い）", "仮柵（BASHIRA に項目が無い）", "2 イの馬体重"]);
-    expect(env.entryCalls.filter((call) => call.limit === 500)).toHaveLength(1);
+    expect(ENTRIES_ROW_LIMIT).toBeLessThanOrEqual(200);
+    expect(env.entryCalls.filter((call) => call.limit === ENTRIES_ROW_LIMIT)).toHaveLength(1);
     const page = env.notionCalls.find((call) => call.method === "POST" && call.path === "/v1/pages");
     const body = JSON.stringify(page?.body);
     expect(body).toContain("コースは先行が残る");
