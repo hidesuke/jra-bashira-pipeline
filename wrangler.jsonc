@@ -17,7 +17,7 @@
     "issues": { "enabled": true }
   },
   // 金曜・土曜 16:45 JST。Cloudflare の cron は UTC で、曜日の 1 は日曜なので FRI,SAT。
-  // scheduled は翌日の全レースを積むだけ。予想は Queue が 3 並列で進める。
+  // scheduled は翌日の全レースを積むだけ。予想は Queue が 1 件ずつ進める。
   // previews には triggers を置かない。プレビューの scheduled は動かない。
   "triggers": {
     "crons": ["45 7 * * FRI,SAT"]
@@ -57,8 +57,8 @@
         // このキューは deploy では作られない。先に次を実行する:
         // npx wrangler queues create jra-bashira-race-dlq
         "dead_letter_queue": "jra-bashira-race-dlq",
-        // 同時に 3 メッセージ。別レースは並走する。同じレースの次段階は、前のメッセージが終わってから積む。
-        "max_concurrency": 3
+        // 同時に 1 メッセージ。別レースは待たせる。同じレースの次段階は、前のメッセージが終わってから積む。
+        "max_concurrency": 1
       }
     ]
   },

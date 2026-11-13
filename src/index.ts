@@ -107,6 +107,7 @@ export default {
   },
   async queue(batch: MessageBatch, env: Env): Promise<void> {
     const deps = pipelineDeps(env);
+    // max_batch_size は 1。複数届いてもレースは 1 件ずつ待つ。
     for (const message of batch.messages) {
       const decision = await handleJobMessage(message.body as JobMessage, deps, {
         attempt: message.attempts,

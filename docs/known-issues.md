@@ -6,4 +6,4 @@
 
 ## まだ本番で見ていないこと
 
-3 並列の全レースバッチは未実施で、初回は 2026-11-13 16:45（日本時間）の予定である。その日の KV 書き込み、Gemini の呼び出し、Durable Object の外部 40 件に収まるかも、まだ見ていない。詳細は [verification.md](verification.md) にある。
+レースは 1 件ずつ進める。開催日の全レースを 1 件ずつ最後まで進めた記録は、まだ本番にない。その日の KV 書き込み、Gemini の呼び出し、Durable Object の外部 40 件に収まるかも、まだ見ていない。詳細は [verification.md](verification.md) にある。
