@@ -134,7 +134,7 @@ Worker が使う主なキーです。過去最高レースレベルの 2 つは�
 | `notion:page:v1:{raceKey}` | 読み書き。追記するページ ID |
 | `config:models`、`config:models:previous`、`config:models:history` | 読み書き。Gemini のモデル |
 | `cache:v2:gemini-models` | 読み書き。モデル一覧の 10 分キャッシュ |
-| `prompt:v2:course`、`prompt:v2:race` | 読み取り。本文の入れ方はこのリポジトリに無い |
+| `prompt:v2:course`、`prompt:v2:race` | 読み取り。本文の入れ方は `hidesuke/jra-prompts` の `bashira/scripts/put-prompts.mjs`。このリポジトリには無い |
 | `input:v1:{raceKey}` と `:u` `:r` `:p` `:c` `:s` の分割 | 読み書き。馬柱、ユーザー文、近10走、コース成績、出走馬のコース成績。`raceLevel` は同じ JSON |
 | `trace:v1:{raceKey}` と `:cu` `:co` `:ro` の分割 | 読み書き。コースのユーザー文と、両方の出力。`raceLevel` は同じ JSON。システムプロンプトは入れない |
 | `stats:v2:{id}:{場}:{馬場}:{距離}:{開始年}:{min_starts}:{対象名}` | 読み書き。枠・4角・馬場状態の集計キャッシュ。予想には渡さない。回りで絞ったときだけ末尾に `:side:{値}` |

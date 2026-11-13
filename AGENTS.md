@@ -4,7 +4,7 @@
 
 このリポジトリは公開リポジトリである。次はコミットしない。
 
-- プロンプトの本文。本文は非公開リポジトリ `hidesuke/jra-bashira-prompts` にだけ置く。このリポジトリに書いてよいのは、KV のキー名、差し込み名、処理の説明までである。
+- プロンプトの本文。本文は非公開リポジトリ `hidesuke/jra-prompts` にだけ置く。BASHIRA 版は `bashira/`（`bashira/VERSION`、`bashira/prompts/vX.Y.Z/`、`bashira/releases/`、`bashira/scripts/put-prompts.mjs`、`bashira/docs/`）、Dify 版は `dify/`。このリポジトリに書いてよいのは、KV のキー名、差し込み名、処理の説明までである。
 - 秘密情報。トークン、Access の認証情報、`.dev.vars` の値を含む。
 
 ## 確認してから行うこと

@@ -8,7 +8,7 @@
 
 ## 全体の構成
 
-このリポジトリは公開の Cloudflare Worker です。予想に使う文章そのものは、別の非公開リポジトリで管理します。
+このリポジトリは公開の Cloudflare Worker です。予想に使う文章そのものは、非公開リポジトリ `hidesuke/jra-prompts` の `bashira/` で管理します。
 
 | 役割 | 場所 |
 | --- | --- |
@@ -16,7 +16,7 @@
 | 入力 | BASHIRA の MCP。`get_races`、`get_entries`、`get_odds`、`get_stats` |
 | 文章生成 | Gemini。先にコース分析を作り、その本文を入れてレース予想を作る。コース分析だけ Google 検索を付ける。両方の思考レベルは `high` |
 | 出力 | Notion データベース `3c57c7b2e419808ba999e9c1909fa39c`（「場立ちのhidesuke JRA予想」）。スキーマは変えず、別ページを追加する |
-| プロンプト | 非公開リポジトリ `hidesuke/jra-bashira-prompts` にだけ本文を置く。Worker は KV の `prompt:v2:course` と `prompt:v2:race` を読む |
+| プロンプト | 本文は非公開リポジトリ `hidesuke/jra-prompts` にだけ置く。この Worker が読む BASHIRA 版は `bashira/`。Dify 版は `dify/`。Worker は KV の `prompt:v2:course` と `prompt:v2:race` を読む |
 
 処理の骨格は次のとおりです。
 
@@ -26,7 +26,7 @@
 
 段階の分割、外部呼び出しの上限、同じレースのロックは [docs/pipeline.md](docs/pipeline.md) に書いてあります。枠・4角・馬場状態のコース集計（`get_stats` のキャッシュ）は、コース分析にもレース予想にも渡しません。コース分析には、別に計算したコースデータ要約を渡します。レース予想には、父・母の父・騎手のこのコースの成績を `{{runner_stats}}` で渡します。`course_side` が `内`、`外`、`外→内`、`内→外` のときは、その回りだけを集計します。`なし` は絞りません。3歳未勝利（芝またはダート。G1、G2、G3、L とオープンは除く）では、race の system にマーカー `<!-- input:race_level -->` があるときだけ、馬柱の末尾に過去最高レースレベルを足します。値は共有マシンが `APP_KV` に書いた `c1:v1:meta` と `c1:v1:feat:{asof}` を読むだけで、この Worker は計算も書き込みもしません。マーカーが無いプロンプトには足しません。差し込み名は [docs/prompts.md](docs/prompts.md)、集計の中身は [docs/course-odds.md](docs/course-odds.md) です。
 
-プロンプト本文を KV へ入れる手順は、このリポジトリにはありません。Worker が読むのは、KV に入っている `{"version","system","user"}` だけです。差し込み名は [docs/prompts.md](docs/prompts.md) です。
+プロンプト本文を KV へ入れる手順は、このリポジトリにはありません。手順の場所は非公開リポジトリ `hidesuke/jra-prompts` の `bashira/scripts/put-prompts.mjs` です。Worker が読むのは、KV に入っている `{"version","system","user"}` だけです。差し込み名は [docs/prompts.md](docs/prompts.md) です。
 
 ## セットアップ
 
