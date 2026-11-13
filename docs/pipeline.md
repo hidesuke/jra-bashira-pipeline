@@ -31,7 +31,7 @@
 
 それに加え、predict で各馬の通算を `get_entries` で取ります。近10走の表（`{{past_runs}}`）と、同じコース・同じ競馬場・関連コースの成績（`{{course_records}}`）は、この応答から作ります。近10走のための別呼び出しはありません。関連コースの一覧は、コース分析の末尾から読み、`{{course_analysis}}` と Notion のコース分析からは除きます。読めないときは `raceInputGaps` に残し、関連コースの成績だけ空欄にして予想は続けます。今回の単勝（`{{win_odds}}`）は、collect で既に取る `get_odds` と出馬表から作り、追加の呼び出しはしません。中身は [prompts.md](prompts.md) と [umabashira.md](umabashira.md) です。
 
-通算の `get_entries` は、出走する馬の名前をまとめて1回で取ります（`limit` 500。続きを取る offset は無い）。`career_starts` の見積もりが 450 行を超えるとき、または馬名が 100 件を超えるときは、呼び出しを分けます。応答が打ち切れて複数頭が混ざっているときは、頭数を半分にして取り直します。1頭が 500 行で打ち切れたときは、その馬の欠けを `raceInputGaps` に残します。この取得は 1 配送で最大 8 回（`CAREER_FETCH_LIMIT`）です。同名で近走を特定できない馬は、この呼び出しに入れません。
+通算の `get_entries` は、出走する馬の名前をまとめて取ります（1 呼び出しの `limit` は 200。BASHIRA の上限と同じ）。`career_starts` の見積もりが 150 行を超えるとき、または馬名が 100 件を超えるときは、呼び出しを分けます。応答が打ち切れて複数頭が混ざっているときは、頭数を半分にして取り直します。1頭が 200 行で打ち切れたときは、その馬の欠けを `raceInputGaps` に残します。この取得は 1 配送で最大 8 回（`CAREER_FETCH_LIMIT`）です。同名で近走を特定できない馬は、この呼び出しに入れません。
 
 近10走のレース名は `race_name_main` のままです。表の末尾の条件列は、同じ `get_entries` の `race_type` と `race_condition` が両方あるときだけ並べます。どちらかが無い走は空欄です。追加の呼び出しはありません。
 
@@ -64,7 +64,7 @@ KV、Queue、Durable Object へのバインディング呼び出しは、この�
 
 レース情報を足すための外部 `fetch` は 0 回です。既存の `get_races` 1 回と、出馬表の `get_entries` 1 回の列を増やすだけです。Notion 段の予算 45 も変えません。過去走とコース成績の BASHIRA 呼び出しは predict の配送で、Notion の配送には入れません。
 
-predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回（コース分析とレース予想）です。BASHIRA は Durable Object 経由で、この 45 件には数えません。仮に Durable Object への呼び出しも 50 件に数えるとしても、既存はコース要約の `tools/list` 1、`callTools` 1、`get_races` 1、通算の `tools/list` 1（出走馬のコース成績もこの一覧を使う。通算を呼ばないときだけ、もう 1 回取る）、通算の `get_entries` が通常 1 回（上限 8）、ペースの `get_races` が最大 2 回、Gemini 2 です。ここに父と母の父の `get_stats`（通常 2、曖昧なら再指定で最大 4）と、騎手の `get_stats`（キャッシュが無いとき最大 18、`callTools` では 8 件ずつ）を足します。`RUNNER_STATS_CALL_LIMIT` は 24 で、合わせても 50 より少ないです。キャッシュが当たるレースは騎手の分が 0 です。Notion 段は外部 45 のままです。枠・4角・馬場状態の集計は、これまでどおり別の `stats` メッセージです。
+predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回（コース分析とレース予想）です。BASHIRA は Durable Object 経由で、この 45 件には数えません。仮に Durable Object への呼び出しも 50 件に数えるとしても、既存はコース要約の `tools/list` 1、`callTools` 1、`get_races` は通常 1（打ち切れたときだけ offset で続く）、通算の `tools/list` 1（出走馬のコース成績もこの一覧を使う。通算を呼ばないときだけ、もう 1 回取る）、通算の `get_entries` が通常数回（上限 8）、ペースの `get_races` が最大 2 回、Gemini 2 です。ここに父と母の父の `get_stats`（通常 2、曖昧なら再指定で最大 4）と、騎手の `get_stats`（キャッシュが無いとき最大 18、`callTools` では 8 件ずつ）を足します。`RUNNER_STATS_CALL_LIMIT` は 24 で、合わせても 50 より少ないです。キャッシュが当たるレースは騎手の分が 0 です。Notion 段は外部 45 のままです。枠・4角・馬場状態の集計は、これまでどおり別の `stats` メッセージです。
 
 上限に達した Worker は、ジョブを分割して止める再試行可能なエラーにします。Notion へ書き始めたあとなら、下の「Notion の続き」に従います。
 
@@ -115,7 +115,9 @@ predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回�
 
 金曜と土曜の 16:45（日本時間）に、翌日の開催を積みます。式は `45 7 * * FRI,SAT` です。時刻の決め方は [operations.md](operations.md) にあります。
 
-`scheduled` は、レースを列挙して積む処理が終わるまで待ちます。予想の完了は待ちません。BASHIRA の `get_races` に、その開催日の `race_meeting_date` を `gte` と `lte` で渡します。上限は 500 件です。続きを取る offset は無いので、`truncated` のときは 10 場に分けて取り直します。1 場でもまだ打ち切れていたら、その日は 1 件も積みません。中止（`race_status` が `canceled`）は積みません。0 件ならログして戻ります。
+`scheduled` は、レースを列挙して積む処理が終わるまで待ちます。予想の完了は待ちません。BASHIRA の `get_races` に、その開催日の `race_meeting_date` を `gte` と `lte` で渡します。1 回の `limit` は KV `config:get-races-limit`（正の整数。無い、または不正なら 200）です。`get_races` は `offset` を持ち、上限は 2000 です。`truncated` のときは `offset` に `row_count` を足して同じ条件で続け、`data_version` がページの途中で変わったら先頭から 1 回だけ取り直します。スキーマに `offset` が無いときだけ、10 場に分けて取り直します。場でもまだ打ち切れているとき、`offset` の上限を超えるとき、`data_version` がもう一度変わったときは、その日は 1 件も積みません。中止（`race_status` が `canceled`）は積みません。0 件ならログして戻ります。
+
+`limit` が BASHIRA の上限を超えて `validating /properties/limit: maximum:` の形で拒まれたときは、レースを積まず、要約を KV `batch:v1:{開催日}` に残します（`dry_run` でも残します）。`limit_sent` は送った件数、`limit_maximum` はメッセージから読んだ上限、`error` はその両方と元の文です。`NOTIFY_WEBHOOK_URL` があるときは `type` が `batch_failed` の JSON で同じ 2 つを送ります。URL が無ければ通知しません。cron の呼び出し自体は失敗のままです。件数の変え方と積み直しは [README](../README.md) の「開催日の get_races 件数」です。
 
 処理中のジョブと、`phase` が `done` のジョブは飛ばします。`error` のジョブはもう一度積みます。同じ `race_key` が列挙に二度出たときも飛ばします。積めた件数、飛ばした件数、失敗した件数はログと KV `batch:v1:{開催日}` に 1 件残します。レースごとのキーは増やしません。要約は 14 日で消えます。手動で同じことをする入口は [admin.md](admin.md) の `POST /admin/batch` です。
 
@@ -127,7 +129,8 @@ Worker が使う主なキーです。過去最高レースレベルの 2 つは�
 | --- | --- |
 | `job:v1:{raceKey}` | 読み書き。ジョブの状態 |
 | `lock:v1:{raceKey}` | 読み書き。同じレースのロック |
-| `batch:v1:{date}` | 書き込み。開催日の投入要約。14 日で消える |
+| `batch:v1:{date}` | 書き込み。開催日の投入要約。14 日で消える。`limit` 上限の失敗も残す |
+| `config:get-races-limit` | 読み取り。開催日の `get_races` の件数。正の整数。無いときは 200 |
 | `notion:page:v1:{raceKey}` | 読み書き。追記するページ ID |
 | `config:models`、`config:models:previous`、`config:models:history` | 読み書き。Gemini のモデル |
 | `cache:v2:gemini-models` | 読み書き。モデル一覧の 10 分キャッシュ |

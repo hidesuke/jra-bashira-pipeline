@@ -6,13 +6,13 @@ import { comparableMeetingDay, meetingDay, numberField, rowsToObjects, stringFie
 import { assertFields, assertToolArgs, selectColumns, type ToolCatalog } from "./schema";
 import { CODE_BY_VENUE, JobError, type RaceRef } from "./types";
 
-/** get_entries の上限。続きを取る offset は無い。 */
-export const ENTRIES_ROW_LIMIT = 500;
+/** get_entries の 1 呼び出しの上限。BASHIRA の limit 最大は 200。 */
+export const ENTRIES_ROW_LIMIT = 200;
 /**
- * 1 回に見積もる行数。500 より手前で分け、今回のレース行の余裕を残す。
+ * 1 回に見積もる行数。上限より手前で分け、今回のレース行の余裕を残す。
  * 超えた馬は別の get_entries に分ける。
  */
-export const CAREER_ROW_BUDGET = 450;
+export const CAREER_ROW_BUDGET = 150;
 /** 馬名フィルタの配列上限（BASHIRA の name_value）。 */
 export const NAME_FILTER_LIMIT = 100;
 /**
@@ -458,7 +458,7 @@ async function fetchCareerBatch(
     const right = await fetchCareerBatch(bashira, catalog, race, horses.slice(mid), columns, budget);
     return { rows: [...left.rows, ...right.rows], gaps: [...left.gaps, ...right.gaps] };
   }
-  const gaps = isTruncated(result.data) ? horses.map((horse) => `${horse.horseName}の通算（get_entries が500行で打ち切られた）`) : [];
+  const gaps = isTruncated(result.data) ? horses.map((horse) => `${horse.horseName}の通算（get_entries が${ENTRIES_ROW_LIMIT}行で打ち切られた）`) : [];
   return { rows: rowsToObjects(result.data), gaps };
 }
 

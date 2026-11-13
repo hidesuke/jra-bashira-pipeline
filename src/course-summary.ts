@@ -11,8 +11,10 @@ import { JobError, STATS_BATCH_SIZE } from "./types";
  */
 export const DEFAULT_COURSE_SUMMARY_MIN_COUNT = 30;
 
-/** get_races の上限。打ち切れたときはレース数を下限として書く。 */
-export const COURSE_RACE_COUNT_LIMIT = 500;
+/** get_races の 1 呼び出しの上限。BASHIRA の limit 最大は 200。打ち切れたときは offset で続ける。 */
+export const COURSE_RACE_COUNT_LIMIT = 200;
+/** get_races の offset 上限（スキーマの maximum）。 */
+const COURSE_RACE_OFFSET_MAX = 2000;
 
 /** 集計に失敗したとき、コース分析の差し込みに入れる文。 */
 export const COURSE_SUMMARY_UNAVAILABLE = "コースデータ要約はありません（集計に失敗しました）。";
@@ -198,10 +200,7 @@ export async function collectCourseSummary(input: {
     if (ambiguity) throw new JobError(ambiguity, false);
     payloads[plan.stats[index]!.id] = payload;
   }
-  const racesCall = await input.bashira.callTool("get_races", plan.races);
-  if (!racesCall.ok) throw new JobError(racesCall.message, false);
-  const raceAmbiguity = ambiguousNameMessage(racesCall.data);
-  if (raceAmbiguity) throw new JobError(raceAmbiguity, false);
+  const racesPayload = await loadRaceCountPayload(input.bashira, input.catalog, plan.races);
   const rendered = renderCourseSummary({
     venue: input.venue,
     surface: input.surface,
@@ -209,7 +208,7 @@ export async function collectCourseSummary(input: {
     period: plan.period,
     periodYears: input.periodYears,
     payloads,
-    racesPayload: racesCall.data,
+    racesPayload,
     minCount: input.minCount,
     courseSide: input.courseSide,
   });
@@ -222,6 +221,78 @@ export async function collectCourseSummary(input: {
     raceCount: rendered.raceCount,
     raceCountTruncated: rendered.raceCountTruncated,
   };
+}
+
+/**
+ * 確定済みレースの一覧。truncated かつ offset があるときは、row_count を足して続きを取る。
+ * 1 ページで足りるときは応答をそのまま返す。取り切れないときは truncated のまま数の下限にする。
+ */
+async function loadRaceCountPayload(
+  bashira: BashiraPort,
+  catalog: ToolCatalog,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const canOffset = catalog.tools.get_races?.argNames.includes("offset") === true;
+  const pages: unknown[] = [];
+  let offset = 0;
+  let version: string | null = null;
+  let restarts = 0;
+  for (;;) {
+    const callArgs: Record<string, unknown> = { ...args };
+    if (canOffset && offset > 0) callArgs.offset = offset;
+    assertToolArgs(catalog, "get_races", callArgs);
+    const result = await bashira.callTool("get_races", callArgs);
+    if (!result.ok) throw new JobError(result.message, false);
+    const ambiguity = ambiguousNameMessage(result.data);
+    if (ambiguity) throw new JobError(ambiguity, false);
+    const nextVersion = dataVersionOf(result.data);
+    if (offset > 0 && version !== nextVersion) {
+      if (restarts >= 1) return mergeRacePages(pages, true);
+      restarts += 1;
+      pages.length = 0;
+      offset = 0;
+      version = null;
+      continue;
+    }
+    version = nextVersion;
+    const truncated = isTruncated(result.data);
+    if (!truncated && pages.length === 0 && restarts === 0) return result.data;
+    pages.push(result.data);
+    if (!truncated) return mergeRacePages(pages, false);
+    if (!canOffset) return result.data;
+    const count = pageRowCount(result.data);
+    if (count <= 0 || offset + count > COURSE_RACE_OFFSET_MAX) return mergeRacePages(pages, true);
+    offset += count;
+  }
+}
+
+function mergeRacePages(pages: unknown[], truncated: boolean): unknown {
+  const rows: unknown[] = [];
+  let columns: unknown = ["race_id", "race_status"];
+  for (const page of pages) {
+    if (page && typeof page === "object" && Array.isArray((page as { columns?: unknown }).columns)) {
+      columns = (page as { columns: unknown }).columns;
+    }
+    const raw = page && typeof page === "object" ? (page as { rows?: unknown }).rows : null;
+    if (Array.isArray(raw)) rows.push(...raw);
+  }
+  return { columns, rows, row_count: rows.length, truncated };
+}
+
+function dataVersionOf(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const value = (payload as { data_version?: unknown }).data_version;
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+function pageRowCount(payload: unknown): number {
+  const reported = payload && typeof payload === "object" ? numberField(payload as Record<string, unknown>, "row_count") : null;
+  if (reported != null && reported >= 0) return reported;
+  return rowsToObjects(payload).length;
+}
+
+function isTruncated(payload: unknown): boolean {
+  return Boolean(payload && typeof payload === "object" && (payload as { truncated?: unknown }).truncated === true);
 }
 
 export function renderCourseSummary(input: {
