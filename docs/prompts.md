@@ -1,6 +1,6 @@
 # プロンプト
 
-プロンプトの本文は、非公開リポジトリ `hidesuke/jra-bashira-prompts` にだけ置きます。このファイルに書いてあるのは、Worker が KV から読む形と、user 文の差し込み名です。本文を KV へ入れる手順は、このリポジトリにはありません。
+プロンプトの本文は、非公開リポジトリ `hidesuke/jra-prompts` にだけ置きます。2026-11-13 に `hidesuke/jra-bashira-prompts` から改名し、BASHIRA 版は `bashira/` へ移りました。本文は `bashira/prompts/vX.Y.Z/`、版名は `bashira/VERSION`、台帳は `bashira/releases/`、KV へ書くスクリプトは `bashira/scripts/put-prompts.mjs`、説明は `bashira/docs/` です。Dify 版は同じリポジトリの `dify/` です。このファイルに書いてあるのは、Worker が KV から読む形と、user 文の差し込み名です。本文を KV へ入れる手順は、このリポジトリにはありません。
 
 ## KV の形
 
@@ -47,7 +47,7 @@ user 文の差し込みは次の名前です。置換したあとに `{{` が残
 
 `なし` の 2 行目は `回り: なし（内外の印は無い。集計は絞らない）` です。user に `{{course_side}}` があるときは、そこへ値だけが入り、先頭には足しません。値が無いときは空文字です。要約の本文にも、条件の次の行で同じ回り行を入れます。要約が失敗したときは、先頭か `{{course_side}}` だけが残ります。
 
-プロンプト側（非公開リポジトリ `hidesuke/jra-bashira-prompts` のコース分析 user）に足すもの:
+プロンプト側（非公開リポジトリ `hidesuke/jra-prompts` の `bashira/prompts/vX.Y.Z/` にあるコース分析 user）に足すもの:
 
 - user に `{{course_summary}}` を置く。
 - user に `{{course_side}}` を置く。値は `内`、`外`、`外→内`、`内→外`、`なし` のどれか、または空。置くまで Worker が先頭に `内外回り:` と回り行を足す。置いたあとは先頭に足さない。
@@ -97,12 +97,12 @@ user 文の差し込みは次の名前です。置換したあとに `{{` が残
 
 空欄にした項目は、ジョブの `raceInputGaps` に残します。`GET /admin/jobs` の `race_input_gaps` と、`GET /admin/inspect` の同じ名前で見ます。予想は止めません。
 
-プロンプト側（非公開リポジトリ `hidesuke/jra-bashira-prompts` のレース予想 user）に足すもの:
+プロンプト側（非公開リポジトリ `hidesuke/jra-prompts` の `bashira/prompts/vX.Y.Z/` にあるレース予想 user）に足すもの:
 
 - user に `{{race_facts}}` を置く。置く場所を自分で決める。置くまで Worker が先頭に足す。
 - 空欄の項目は推測で埋めない。仮柵は空のままにする。内外回りに値があるときはその値を使い、`なし` を内や外に読み替えない。空欄の内外回りは埋めない。
 - 馬柱の各馬に増えた「調教師」「馬体重」の行を使う。括弧の美浦は東、栗東は西、招待はそのまま。馬体重の `増減—` は、発表前か前走が無い。
-- プロンプトの version は MINOR を上げる。本文はこのリポジトリに置かない。
+- プロンプトの version は、`hidesuke/jra-prompts` の `bashira/` で MINOR を上げる。本文はこのリポジトリに置かない。
 
 ## 過去走（`{{past_runs}}`）
 
@@ -174,12 +174,12 @@ Worker はこのブロックを読んでから、`{{course_analysis}}` と Notio
 
 `GET /admin/inspect` のレース予想のユーザー文と、`GET /admin/jobs/input` の `race_input` に、この本文が入ります。`include=past_runs` は、プロンプト文を除いたこの節だけを `runner_stats` で返します。欠けは `race_input_gaps` です。
 
-プロンプト側（非公開リポジトリ `hidesuke/jra-bashira-prompts` のレース予想 user）に足すもの:
+プロンプト側（非公開リポジトリ `hidesuke/jra-prompts` の `bashira/prompts/vX.Y.Z/` にあるレース予想 user）に足すもの:
 
 - user に `{{runner_stats}}` を置く。置く場所を自分で決める。置くまで Worker が `{{course_records}}` の次に足す。
 - 勝率と複勝率は計算済みなので、数え直さない。「件数が少ないため参考値」が付いた数字は、その注釈を残して使う。回りで絞ったあとに件数が少なくても、別の回りの成績で埋めない。`回り:` の行が `なし` のときは、今までと同じ範囲の成績である。
 - 「取得できず」「名前が見つからない」「同名のため特定できない」の行は、0 件として扱わない。
-- プロンプトの version は、非公開リポジトリで MINOR を上げる。本文はこのリポジトリに置かない。
+- プロンプトの version は、`hidesuke/jra-prompts` の `bashira/` で MINOR を上げる。本文はこのリポジトリに置かない。
 
 ## 今回の単勝（`{{win_odds}}`）
 
@@ -198,13 +198,13 @@ Worker はこのブロックを読んでから、`{{course_analysis}}` と Notio
 
 馬は馬番の順です。倍率は `odds`、範囲だけあるときは `最低〜最高` です。その馬の倍率が無いときは、コロンのあとが空です。取得そのものができないときも、馬の行は残し、倍率・観測時刻・種別を空にします。
 
-プロンプト側（非公開リポジトリ）に足すもの:
+プロンプト側（非公開リポジトリ `hidesuke/jra-prompts` の `bashira/prompts/vX.Y.Z/` にあるレース予想 user）に足すもの:
 
 - user に `{{past_runs}}`、`{{course_records}}`、`{{runner_stats}}`、`{{win_odds}}` を置く。置く場所を自分で決める。`{{past_runs}}` と `{{course_records}}` と `{{runner_stats}}` は、置くまで Worker が先頭に足す。順はレース情報、過去走、コース成績、出走馬のコース成績。`{{win_odds}}` は置くまで入らない。
 - 短評に、関連コースの `(1着,2着,3着,4着,5着,それ以外)` を書く。同じコースと同じ競馬場も、この本文の行を使う。
 - 短評と競馬新聞風印予想の各行に、今回の単勝を書く。空欄の馬は空欄のままにする。
 - 見出しの順は、レース情報、レース総合判定、競馬新聞風印予想、買い目推奨・馬券戦術、予想の観点・注目ポイント、展開予想、コース分析、指数ランキングと短評。単勝オッズの見出しは出さない。
-- プロンプトの version は MINOR を上げる。本文はこのリポジトリに置かない。
+- プロンプトの version は、`hidesuke/jra-prompts` の `bashira/` で MINOR を上げる。本文はこのリポジトリに置かない。
 
 ## 過去最高レースレベル
 
@@ -240,12 +240,12 @@ Worker はこのブロックを読んでから、`{{course_analysis}}` と Notio
 （基準: 確定データ YYYY-MM-DD まで）
 ```
 
-プロンプト側（非公開リポジトリ `hidesuke/jra-bashira-prompts` のレース予想 system）に足すもの:
+プロンプト側（非公開リポジトリ `hidesuke/jra-prompts` の `bashira/prompts/vX.Y.Z/` にあるレース予想 system）に足すもの:
 
 - system にマーカー `<!-- input:race_level -->` を置く。置くまで Worker はこの節を出さない。
 - この節の使い方の制限を、同じ system に書く。本文はこのリポジトリに置かない。
 - user に新しい `{{...}}` は足さない。節は馬柱の末尾に付く。
-- プロンプトの version は、非公開リポジトリで MINOR を上げる。
+- プロンプトの version は、`hidesuke/jra-prompts` の `bashira/` で MINOR を上げる。本文はこのリポジトリに置かない。
 
 記録は `input:v1:{raceKey}` と `trace:v1:{raceKey}` の `raceLevel` です。項目は `applied`、`reason`、`asof`、`dataThrough`、`featSha256`、`horses`、`missing` です。マーカーが無いときは `reason` が `prompt_without_c1`、対象外は `not_applicable` です。新しいキーは作りません。見方は [admin.md](admin.md) の `GET /admin/inspect` です。
 
