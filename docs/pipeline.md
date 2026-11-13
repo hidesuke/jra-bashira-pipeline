@@ -89,7 +89,7 @@ predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回�
 
 `phase` を `error` に書けたときだけ、任意の Webhook へ POST します。`NOTIFY_WEBHOOK_URL` が未設定なら送りません。本文は JSON で、`type` は `race_failed` です。入るのは `race_key`、`run_id`、失敗したときの `phase_at_failure`、短い `error`、`attempts`、分かれば `http_status`、`inspect_path`（`/admin/inspect?race_key=...`）、`jobs_path`（`/admin/jobs?race_key=...`）、`occurred_at_jst` です。キーは Secret `NOTIFY_WEBHOOK_KEY` です。ヘッダー名は平文の `NOTIFY_WEBHOOK_KEY_HEADER` で、未設定なら `Authorization: Bearer <key>` です。`Authorization` という名前は大文字小文字を問いません。別の名前ならキーをそのままそのヘッダーに入れます。`Content-Type` と `Content-Length` は使いません。URL とキーはログに出しません。失敗したときは HTTP ステータスだけをログし、約 10 秒で打ち切ります。この POST は同じ配送の外部予算に 1 件数えます。ソフト上限の 45 を使い切ったあとでも、プラットフォーム上限の 50 未満なら 1 件だけ送ります。通知の失敗でジョブを `error` 以外にしたり、Queue の再試行を足したりはしません。置き方は [operations.md](operations.md) です。
 
-複数レースを一度に積む入口は、金曜・土曜の cron と `POST /admin/batch` です。どちらもレースごとに `start` を 1 件ずつ積み、`POST /run` と同じ関数を使います。`POST /run` 自体は 1 レースのままです。`max_batch_size` は配送の件数で、レースの束ではありません。`max_concurrency` は 1 なので、別レースのメッセージも 1 件ずつ進みます。同じレースの次の段階は、前のメッセージが終わってから積みます。終了を 1 通にまとめる `batch_completed` は送りません。
+定時実行は停止しています。定期予想は Dify 版（`hidesuke/jra-dify-pipeline`）です。複数レースを一度に積む手動の入口は `POST /admin/batch` です。`scheduled` ハンドラは残していますが、`triggers.crons` は空なので定時では呼ばれません。`POST /admin/batch` と `scheduled` は、レースごとに `start` を 1 件ずつ積み、`POST /run` と同じ関数を使います。`POST /run` 自体は 1 レースのままです。`max_batch_size` は配送の件数で、レースの束ではありません。`max_concurrency` は 1 なので、別レースのメッセージも 1 件ずつ進みます。同じレースの次の段階は、前のメッセージが終わってから積みます。終了を 1 通にまとめる `batch_completed` は送りません。
 
 認可の失敗（未認可、`invalid_grant`、通信失敗を含む refresh 失敗）は再試行せず、ジョブを `error` にします。理由は `GET /admin/jobs` の `error` に出ます。このときも、上の Webhook を 1 回送ります。
 
@@ -111,15 +111,15 @@ predict の Worker 外部 `fetch` は、これまでどおり Gemini が 2 回�
 
 ページを作った直後に、ページ ID をジョブと KV `notion:page:v1:{raceKey}` に残します。追記の途中で外部呼び出しの上限に達しても、次の `notion` メッセージはそのページを続けます。旧ページは、新しい本文が終わるまでアーカイブしません。この続きは最大 8 回（`NOTION_CONTINUATION_LIMIT`）です。ページの選び方は [notion.md](notion.md) です。
 
-## cron
+## 開催日の一括投入
 
-金曜と土曜の 16:45（日本時間）に、翌日の開催を積みます。式は `45 7 * * FRI,SAT` です。時刻の決め方は [operations.md](operations.md) にあります。
+定時実行は停止しています。定期予想は Dify 版（`hidesuke/jra-dify-pipeline`）です。手動は `POST /run` と `POST /admin/batch` です。`triggers.crons` は空配列です。`scheduled` ハンドラは残していますが、定時では呼ばれません。方針は [operations.md](operations.md) にあります。
 
-`scheduled` は、レースを列挙して積む処理が終わるまで待ちます。予想の完了は待ちません。BASHIRA の `get_races` に、その開催日の `race_meeting_date` を `gte` と `lte` で渡します。1 回の `limit` は KV `config:get-races-limit`（正の整数。無い、または不正なら 200）です。`get_races` は `offset` を持ち、上限は 2000 です。`truncated` のときは `offset` に `row_count` を足して同じ条件で続け、`data_version` がページの途中で変わったら先頭から 1 回だけ取り直します。スキーマに `offset` が無いときだけ、10 場に分けて取り直します。場でもまだ打ち切れているとき、`offset` の上限を超えるとき、`data_version` がもう一度変わったときは、その日は 1 件も積みません。中止（`race_status` が `canceled`）は積みません。0 件ならログして戻ります。
+`POST /admin/batch` はリクエストの開催日を使います。`scheduled` が呼ばれたときは、発火時刻の日本時間の翌日を開催日にします。どちらも、レースを列挙して積む処理が終わるまで待ちます。予想の完了は待ちません。BASHIRA の `get_races` に、その開催日の `race_meeting_date` を `gte` と `lte` で渡します。1 回の `limit` は KV `config:get-races-limit`（正の整数。無い、または不正なら 200）です。`get_races` は `offset` を持ち、上限は 2000 です。`truncated` のときは `offset` に `row_count` を足して同じ条件で続け、`data_version` がページの途中で変わったら先頭から 1 回だけ取り直します。スキーマに `offset` が無いときだけ、10 場に分けて取り直します。場でもまだ打ち切れているとき、`offset` の上限を超えるとき、`data_version` がもう一度変わったときは、その日は 1 件も積みません。中止（`race_status` が `canceled`）は積みません。0 件ならログして戻ります。
 
-`limit` が BASHIRA の上限を超えて `validating /properties/limit: maximum:` の形で拒まれたときは、レースを積まず、要約を KV `batch:v1:{開催日}` に残します（`dry_run` でも残します）。`limit_sent` は送った件数、`limit_maximum` はメッセージから読んだ上限、`error` はその両方と元の文です。`NOTIFY_WEBHOOK_URL` があるときは `type` が `batch_failed` の JSON で同じ 2 つを送ります。URL が無ければ通知しません。cron の呼び出し自体は失敗のままです。件数の変え方と積み直しは [README](../README.md) の「開催日の get_races 件数」です。
+`limit` が BASHIRA の上限を超えて `validating /properties/limit: maximum:` の形で拒まれたときは、レースを積まず、要約を KV `batch:v1:{開催日}` に残します（`dry_run` でも残します）。`limit_sent` は送った件数、`limit_maximum` はメッセージから読んだ上限、`error` はその両方と元の文です。`NOTIFY_WEBHOOK_URL` があるときは `type` が `batch_failed` の JSON で同じ 2 つを送ります。URL が無ければ通知しません。`scheduled` の呼び出し自体は失敗のままです。定時では呼ばれません。件数の変え方と積み直しは [README](../README.md) の「開催日の get_races 件数」です。
 
-処理中のジョブと、`phase` が `done` のジョブは飛ばします。`error` のジョブはもう一度積みます。同じ `race_key` が列挙に二度出たときも飛ばします。積めた件数、飛ばした件数、失敗した件数はログと KV `batch:v1:{開催日}` に 1 件残します。レースごとのキーは増やしません。要約は 14 日で消えます。手動で同じことをする入口は [admin.md](admin.md) の `POST /admin/batch` です。
+処理中のジョブと、`phase` が `done` のジョブは飛ばします。`error` のジョブはもう一度積みます。同じ `race_key` が列挙に二度出たときも飛ばします。積めた件数、飛ばした件数、失敗した件数はログと KV `batch:v1:{開催日}` に 1 件残します。レースごとのキーは増やしません。要約は 14 日で消えます。手動の入口は [admin.md](admin.md) の `POST /admin/batch` です。
 
 ## KV のキー
 

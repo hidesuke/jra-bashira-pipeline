@@ -31,6 +31,10 @@
 
 変更のたびに、関係するドキュメントが実装と一致しているか確認し、必要なら同じ PR で更新する。PR 本文に、ドキュメントを確認した結果（更新した／不要だった）を書く。見るのは README、`docs/`、このファイル、`wrangler.jsonc` のコメントである。
 
+## 定時実行
+
+`wrangler.jsonc` の `triggers.crons` は空配列 `[]` のままにする。キーを消さない。キーを消すと、デプロイしても本番の Cron Trigger が残る。定時実行は停止している。定期予想は Dify 版（`hidesuke/jra-dify-pipeline`）である。手動は `POST /run` と `POST /admin/batch` である。`scheduled` ハンドラは残す。
+
 ## プレビュー
 
 `wrangler.jsonc` の `previews` に、本番の KV、Queue、cron、シークレット、本番の Notion データベース ID を足さない。`BABA` は本番の `jra-dify-pipeline` を読む設定のままにする。

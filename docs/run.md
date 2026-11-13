@@ -39,4 +39,4 @@ curl -sS -X POST "https://<worker>/run" \
 
 受理されると 202 で `race_key`、`run_id`、`requested_by` が返ります。同じレースが処理中なら 409 です。進捗は [admin.md](admin.md) の `GET /admin/jobs` です。
 
-開催日の全レースは、この `POST /run` では受け付けません。金曜・土曜の cron と `POST /admin/batch` が、レースごとにここと同じ関数で積みます。見方は [admin.md](admin.md) と [pipeline.md](pipeline.md) です。
+開催日の全レースは、この `POST /run` では受け付けません。定時実行は停止しています。定期予想は Dify 版（`hidesuke/jra-dify-pipeline`）です。手動の一括投入は `POST /admin/batch` が、レースごとにここと同じ関数で積みます。見方は [admin.md](admin.md) と [pipeline.md](pipeline.md) です。

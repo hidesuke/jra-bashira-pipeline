@@ -740,10 +740,12 @@ describe("concurrency", () => {
 });
 
 describe("worker schedule config", () => {
-  it("runs one race at a time on Friday and Saturday 07:45 UTC", () => {
+  it("keeps cron triggers empty and runs one race at a time", () => {
     const root = join(dirname(fileURLToPath(import.meta.url)), "..");
     const text = readFileSync(join(root, "wrangler.jsonc"), "utf8");
-    expect(text).toContain(`"crons": ["${NEXT_DAY_BATCH_CRON}"]`);
+    expect(text).toContain('"triggers"');
+    expect(text).toContain('"crons": []');
+    expect(text).not.toContain(NEXT_DAY_BATCH_CRON);
     expect(text).toContain('"max_batch_size": 1');
     expect(text).toContain('"max_batch_timeout": 1');
     expect(text).toContain('"max_retries": 3');

@@ -1,9 +1,9 @@
 {
   "name": "jra-bashira-pipeline",
-  "version": "0.9.3",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
-  "description": "BASHIRA で一次予想を作り、Notion に書く Cloudflare Worker。金曜・土曜は翌日の全レースを積む",
+  "description": "BASHIRA で一次予想を作り、Notion に書く Cloudflare Worker。定時実行は停止。手動は /run と /admin/batch",
   "scripts": {
     "prepare": "node scripts/write-build-info.mjs",
     "types": "wrangler types",

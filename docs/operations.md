@@ -30,7 +30,7 @@ Worker がまだ無い状態では `wrangler secret put` もダッシュボー�
 
 ## ビルドと `/health` の commit
 
-`/health` は `ok`、`mode`（`next-day-batch`）、`version`、`commit`、`version_id` を返します。`version` は `package.json` の version で、コードの `APP_VERSION`（`src/version.ts`）と同じです。いまの値は `0.9.3` です。`commit` は、空でなければ `CF_VERSION_METADATA.tag` です。Workers Builds ではこの tag が空になることがあります。そのときはビルド時に `src/build-info.ts` へ書いた SHA を使います。両方空なら `commit` は null です。
+`/health` は `ok`、`mode`（`manual`。定時の cron は無く、手動の `/run` と `/admin/batch`）、`version`、`commit`、`version_id` を返します。`version` は `package.json` の version で、コードの `APP_VERSION`（`src/version.ts`）と同じです。いまの値は `0.10.0` です。`commit` は、空でなければ `CF_VERSION_METADATA.tag` です。Workers Builds ではこの tag が空になることがあります。そのときはビルド時に `src/build-info.ts` へ書いた SHA を使います。両方空なら `commit` は null です。
 
 SHA を書くのは `scripts/write-build-info.mjs` です。次のときだけファイルを書き換えます。
 
@@ -103,10 +103,12 @@ BASHIRA、Gemini、Notion はモックです。実 API へのデプロイや書�
 
 同じ `npm ci` と `npm run check` を、GitHub Actions（[`.github/workflows/check.yml`](../.github/workflows/check.yml)）が pull request と `main` への push で実行します。シークレットは使わず、デプロイはしません。デプロイは Workers Builds のままです。
 
-## cron
+## 定時実行
 
-金曜と土曜の 16:45（日本時間）に、翌日の全レースを積みます。`wrangler.jsonc` の式は `45 7 * * FRI,SAT` です。Cloudflare の cron は UTC で、曜日の 1 は日曜なので金・土は `FRI,SAT` です。7:45 UTC は 16:45 JST で、日付は変わりません。積む開催日は、発火した瞬間の日本時間の翌日です。
+定時実行は停止しています。定期予想は Dify 版（`hidesuke/jra-dify-pipeline`）です。手動は `POST /run`（1 レース）と `POST /admin/batch`（開催日の一括投入と `dry_run`）です。
 
-`scheduled` は予想の完了を待ちません。0 件の日はログして戻ります。処理中と完了済みのレースは積みません。失敗済みはもう一度積みます。件数はログと KV `batch:v1:{開催日}` の 1 件に残し、14 日で消します。プレビューには cron を置いていないので、プレビューの `scheduled` は動きません。進み方とロックは [pipeline.md](pipeline.md)、手動の再実行は [admin.md](admin.md) です。
+`wrangler.jsonc` の `triggers.crons` は空配列 `[]` です。キーは残します。キーを消すと、デプロイしても本番の Cron Trigger が残ります。`scheduled` ハンドラはコードに残しています。トリガーが空なので、定時では呼ばれません。プレビューにも `triggers` は置いていません。
 
-本番で、この cron が翌日の全レースを 1 件ずつ最後まで進めた記録は、まだありません。見方は [verification.md](verification.md) です。
+ハンドラが呼ばれたときは、発火時刻の日本時間の翌日の全レースを積みます。予想の完了は待ちません。0 件の日はログして戻ります。処理中と完了済みのレースは積みません。失敗済みはもう一度積みます。件数はログと KV `batch:v1:{開催日}` の 1 件に残し、14 日で消します。進み方とロックは [pipeline.md](pipeline.md)、手動の再実行は [admin.md](admin.md) です。
+
+本番で、開催日の全レースを 1 件ずつ最後まで進めた記録は、まだありません。見方は [verification.md](verification.md) です。

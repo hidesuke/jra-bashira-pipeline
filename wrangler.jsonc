@@ -16,11 +16,12 @@
     "traces": { "enabled": true, "head_sampling_rate": 1 },
     "issues": { "enabled": true }
   },
-  // 金曜・土曜 16:45 JST。Cloudflare の cron は UTC で、曜日の 1 は日曜なので FRI,SAT。
-  // scheduled は翌日の全レースを積むだけ。予想は Queue が 1 件ずつ進める。
+  // 定時実行は停止。triggers.crons は空配列のままにする。キーを消すと本番のトリガーが残る。
+  // scheduled ハンドラは残す。手動は POST /run と POST /admin/batch。
+  // 定期予想は Dify 版（hidesuke/jra-dify-pipeline）。
   // previews には triggers を置かない。プレビューの scheduled は動かない。
   "triggers": {
-    "crons": ["45 7 * * FRI,SAT"]
+    "crons": []
   },
   "vars": {
     "BASHIRA_MCP_URL": "https://mcp.bashira.omninode.co.jp/mcp",

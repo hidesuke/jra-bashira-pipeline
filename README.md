@@ -2,7 +2,7 @@
 
 1 レースずつ BASHIRA から出走・成績・オッズを取り、Gemini でコース分析と一次予想を作り、既存の Notion データベース「場立ちのhidesuke JRA予想」に別ページとして書く Cloudflare Worker です。
 
-手動の `POST /run` は 1 レースだけです。金曜と土曜の 16:45（日本時間）に、cron が翌日の全レースを同じ経路で Queue に積みます。予想そのものは Queue が 1 件ずつ進めます。
+定時実行は停止しています。定期予想は Dify 版（`hidesuke/jra-dify-pipeline`）です。手動の `POST /run` は 1 レース、`POST /admin/batch` は開催日の全レース（`dry_run` を含む）です。予想そのものは Queue が 1 件ずつ進めます。
 
 シークレットの値、プロンプトの本文、Access の Client Secret は、このリポジトリに置きません。
 
@@ -20,7 +20,7 @@
 
 処理の骨格は次のとおりです。
 
-1. Access を通した `POST /run` が、レース 1 件を Queue `jra-bashira-race` に積む。金曜・土曜の cron と `POST /admin/batch` も、同じ関数でレースごとに積む。
+1. Access を通した `POST /run` が、レース 1 件を Queue `jra-bashira-race` に積む。`POST /admin/batch` も、同じ関数でレースごとに積む。定時実行は停止している。
 2. Consumer は、1 つの配送でメッセージを 1 件進める（`max_batch_size` は 1）。別レースも同時には進まない（`max_concurrency` は 1）。段階は、出走と馬場の収集、馬ごとの近走、コース集計、Gemini、Notion への書き込みです。
 3. 同じレースを再実行するときは、前の BASHIRA ページをアーカイブし、同じ書式で新しいページを作ります。
 
@@ -131,7 +131,7 @@ npx wrangler secret put NOTIFY_WEBHOOK_KEY
 
 | メソッド | パス | 認証 | 役割 |
 | --- | --- | --- | --- |
-| `GET` | `/health` | なし | 生存確認。`ok` と `mode`（`next-day-batch`）、`version`（いまは `0.9.3`）、`commit`、`version_id` を返す |
+| `GET` | `/health` | なし | 生存確認。`ok` と `mode`（`manual`。定時の cron は無く、手動の `/run` と `/admin/batch`）、`version`（いまは `0.10.0`）、`commit`、`version_id` を返す |
 | `POST` | `/run` | Access JWT | レース 1 件を積む。受理は 202、処理中は 409 |
 | `POST` | `/admin/batch` | Access JWT | 指定した開催日の全レースを積む。`dry_run: true` は一覧だけで積まない |
 | `GET` | `/oauth/start` | Access JWT | BASHIRA の認可を始める |
@@ -148,7 +148,7 @@ npx wrangler secret put NOTIFY_WEBHOOK_KEY
 
 ## 開催日の get_races 件数
 
-金曜・土曜の cron と `POST /admin/batch` は、翌日（または指定日）のレースを BASHIRA の `get_races` で列挙します。1 回に取る件数 `limit` はコードに固定せず、既存の KV バインディング `APP_KV` から読みます。
+定時実行は停止しています。定期予想は Dify 版（`hidesuke/jra-dify-pipeline`）です。`POST /admin/batch` は、指定した開催日のレースを BASHIRA の `get_races` で列挙します。1 回に取る件数 `limit` はコードに固定せず、既存の KV バインディング `APP_KV` から読みます。
 
 | 項目 | 値 |
 | --- | --- |
@@ -195,7 +195,7 @@ curl -sS -X POST "https://<worker>/admin/batch" \
 
 | ファイル | 内容 |
 | --- | --- |
-| [docs/pipeline.md](docs/pipeline.md) | 段階、Queue、外部呼び出しの上限、ロック、cron |
+| [docs/pipeline.md](docs/pipeline.md) | 段階、Queue、外部呼び出しの上限、ロック、開催日の一括投入 |
 | [docs/run.md](docs/run.md) | `POST /run` のリクエストと場コード |
 | [docs/access.md](docs/access.md) | Cloudflare Access の検証と呼び出し元 |
 | [docs/bashira-auth.md](docs/bashira-auth.md) | BASHIRA の OAuth と MCP |
@@ -206,6 +206,6 @@ curl -sS -X POST "https://<worker>/admin/batch" \
 | [docs/admin.md](docs/admin.md) | 管理用エンドポイント |
 | [docs/notion.md](docs/notion.md) | Notion のプロパティ、ページの作り方、本文のブロック |
 | [docs/course-odds.md](docs/course-odds.md) | コース集計、馬場、単勝オッズ |
-| [docs/operations.md](docs/operations.md) | シークレット、ビルドの commit、プレビュー、Free プランの上限、テスト |
+| [docs/operations.md](docs/operations.md) | シークレット、ビルドの commit、プレビュー、定時実行、Free プランの上限、テスト |
 | [docs/verification.md](docs/verification.md) | 以前の環境で確認できたことと、できていないこと |
 | [docs/known-issues.md](docs/known-issues.md) | 既知の問題 |

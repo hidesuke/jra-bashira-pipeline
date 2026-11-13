@@ -77,7 +77,7 @@ export async function handleRequest(request: Request, deps: HttpDeps): Promise<R
     if (request.method === "GET" && url.pathname === "/health") {
       return json({
         ok: true,
-        mode: "next-day-batch",
+        mode: "manual",
         version: APP_VERSION,
         commit: commitOf(deps),
         version_id: deps.version?.id || null,
